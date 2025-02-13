@@ -122,7 +122,6 @@ client.on('interactionCreate', async interaction => {
                     { name: '현재 인원', value: '1명', inline: true },
                     { name: '남은 시간', value: `${duration}분`, inline: true },
                     { name: '설명', value: description },
-                    { name: '참가자 목록', value: `1. ${interaction.member.displayName}` }
                 )
                 .setTimestamp();
 
@@ -319,8 +318,7 @@ client.on('interactionCreate', async interaction => {
             // 채널에 멘션으로 완료 메시지 전송
             const mentions = gameData.participantIds.map(id => `<@${id}>`).join(', ');
             await interaction.channel.send({
-                content: gameData.useEveryone ?
-                    `${mentions}\n일나라! 모집 완료다! 게임하자 쓰바라마들아! 🎮` :
+                content:
                     `${mentions}\n일나라! 모집 완료다! 게임하자 쓰바라마들아! 🎮`,
                 embeds: [embed],
             });

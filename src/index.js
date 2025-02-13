@@ -173,7 +173,7 @@ client.on('interactionCreate', async interaction => {
                     // 새 메시지로 시간 초과 알림
                     await interaction.channel.send({
                         content: gameData.useEveryone ?
-                            '@everyone\n⏰ 너가 안 와서 파티 터졌어!!!' :
+                            '⏰ 너가 안 와서 파티 터졌어!!!' :
                             '⏰ 너가 안 와서 파티 터졌어!!!',
                         embeds: [timeoutEmbed],
                         allowedMentions: { parse: ['everyone'] }
@@ -228,8 +228,7 @@ client.on('interactionCreate', async interaction => {
             // 취소 알림 메시지
             if (gameData.useEveryone) {
                 await interaction.channel.send({
-                    content: '@everyone\n❌ 모집이 취소되었다 쓰바라마!!',
-                    allowedMentions: { parse: ['everyone'] }
+                    content: '❌ 모집이 취소되었다 쓰바라마!!',
                 });
             }
             return;
@@ -321,10 +320,9 @@ client.on('interactionCreate', async interaction => {
             const mentions = gameData.participantIds.map(id => `<@${id}>`).join(', ');
             await interaction.channel.send({
                 content: gameData.useEveryone ?
-                    `@everyone\n${mentions}\n일나라! 모집 완료다! 게임하자 쓰바라마들아! 🎮` :
+                    `${mentions}\n일나라! 모집 완료다! 게임하자 쓰바라마들아! 🎮` :
                     `${mentions}\n일나라! 모집 완료다! 게임하자 쓰바라마들아! 🎮`,
                 embeds: [embed],
-                allowedMentions: { parse: ['everyone'], users: gameData.participantIds }
             });
 
             // 참가자들에게 개인 메시지 전송

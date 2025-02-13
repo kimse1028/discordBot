@@ -35,8 +35,10 @@ const commands = [
                 .setRequired(true))
         .addIntegerOption(option =>
             option.setName('인원')
-                .setDescription('모집 인원을 입력하세요')
-                .setRequired(true))
+                .setDescription('모집 인원을 입력하세요(2~10)')
+                .setRequired(true)
+                .setMinValue(2)
+                .setMaxValue(10))
         .addStringOption(option =>
             option.setName('설명')
                 .setDescription('게임 설명이나 하고 싶은 말을 입력하세요')
@@ -69,7 +71,7 @@ client.once('ready', async () => {
 // 참가자 목록을 저장할 Map
 const gameParticipants = new Map();
 
-// 슬래시 커맨드 처리
+// 슬래시 커맨드와 버튼 상호작용 처리
 client.on('interactionCreate', async interaction => {
     if (!interaction.isCommand() && !interaction.isButton()) return;
 
@@ -91,7 +93,7 @@ client.on('interactionCreate', async interaction => {
                 maxPlayers: players,
                 endTime: endTime,
                 game: game,
-                duration: duration // 시간값 저장
+                duration: duration
             });
 
             const embed = new EmbedBuilder()
@@ -179,7 +181,7 @@ client.on('interactionCreate', async interaction => {
 
         // 모집 취소 처리 (모집자 전용)
         if (action === 'cancel') {
-            if (interaction.member.displayName !== gameData.host) {
+            if (interaction.member.id !== gameData.hostId) {
                 await interaction.reply({
                     content: '니가 만든거 아니자나 쓰바라마!',
                     ephemeral: true
@@ -205,7 +207,7 @@ client.on('interactionCreate', async interaction => {
 
         if (action === 'join') {
             // 모집자는 참가할 수 없음
-            if (interaction.member.displayName === gameData.host) {
+            if (interaction.member.id === gameData.hostId) {
                 await interaction.reply({
                     content: '니는 모집자잖아 모지리쓰바라마!',
                     ephemeral: true
@@ -214,7 +216,7 @@ client.on('interactionCreate', async interaction => {
             }
 
             // 이미 참가한 사람인지 확인
-            if (gameData.participants.includes(interaction.member.displayName)) {
+            if (gameData.participantIds.includes(interaction.member.id)) {
                 await interaction.reply({
                     content: '이미 참가했는데 와누르노 쓰바라마!',
                     ephemeral: true
@@ -233,10 +235,11 @@ client.on('interactionCreate', async interaction => {
 
             // 참가자 추가
             gameData.participants.push(interaction.member.displayName);
+            gameData.participantIds.push(interaction.member.id);
         }
         else if (action === 'leave') {
             // 모집자는 나갈 수 없음
-            if (interaction.member.displayName === gameData.host) {
+            if (interaction.member.id === gameData.hostId) {
                 await interaction.reply({
                     content: '니가 도망갈라카믄 우짜노 쓰바라마?',
                     ephemeral: true
@@ -245,7 +248,7 @@ client.on('interactionCreate', async interaction => {
             }
 
             // 참가하지 않은 사람인지 확인
-            if (!gameData.participants.includes(interaction.member.displayName)) {
+            if (!gameData.participantIds.includes(interaction.member.id)) {
                 await interaction.reply({
                     content: '참가 하고 눌러라 쓰바라마!',
                     ephemeral: true
@@ -254,9 +257,11 @@ client.on('interactionCreate', async interaction => {
             }
 
             // 참가자 제거
-            gameData.participants = gameData.participants.filter(
-                name => name !== interaction.member.displayName
-            );
+            const index = gameData.participants.indexOf(interaction.member.displayName);
+            if (index > -1) {
+                gameData.participants.splice(index, 1);
+                gameData.participantIds.splice(index, 1);
+            }
         }
 
         // 인원이 다 찼는지 확인
@@ -282,21 +287,22 @@ client.on('interactionCreate', async interaction => {
                     )
                 );
 
-            // 채널에 완료 메시지 전송
+            // 채널에 멘션으로 완료 메시지 전송
+            const mentions = gameData.participantIds.map(id => `<@${id}>`).join(', ');
             await interaction.channel.send({
-                content: `${gameData.participants.map(p => `<@${interaction.member.id}>`).join(', ')}\n 일나라! 모집 완료다! 게임하자 쓰바라마들아! 🎮`,
+                content: `${mentions}\n일나라! 모집 완료다! 게임하자 쓰바라마들아! 🎮`,
                 embeds: [embed]
             });
 
             // 참가자들에게 개인 메시지 전송
-            for (let i = 0; i < gameData.participantIds.length; i++) {
+            for (const participantId of gameData.participantIds) {
                 try {
-                    const user = await client.users.fetch(gameData.participantIds[i]);
+                    const user = await client.users.fetch(participantId);
                     await user.send({
-                        content: `🎮 ${gameData.game} 모집 완료 쓰바라마!!\n ${gameData.participants.join(', ')}\n스끼야! 스@근~하게 드러온나!`,
+                        content: `🎮 ${gameData.game} 모집 완료 쓰바라마!!\n${gameData.participants.join(', ')}\n스끼야! 스@근~하게 드러온나!`,
                     });
                 } catch (error) {
-                    console.error(`Failed to send DM to ${gameData.participants[i]}:`, error);
+                    console.error(`Failed to send DM to ${participantId}:`, error);
                 }
             }
 

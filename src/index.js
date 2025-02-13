@@ -18,6 +18,9 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
+        GatewayIntentBits.DirectMessages,
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildPresences
     ]
 });
 
@@ -36,8 +39,14 @@ const commands = [
                 .setRequired(true))
         .addStringOption(option =>
             option.setName('설명')
-                .setDescription('추가 설명을 입력하세요')
+                .setDescription('게임 설명이나 하고 싶은 말을 입력하세요')
                 .setRequired(true))
+        .addIntegerOption(option =>
+            option.setName('기간')
+                .setDescription('모집 기간 분 단위(최대180분) 입력하세요')
+                .setRequired(true)
+                .setMinValue(1)
+                .setMaxValue(180))
 ];
 
 // 준비되면 실행
@@ -69,13 +78,20 @@ client.on('interactionCreate', async interaction => {
         if (interaction.commandName === '게임모집') {
             const game = interaction.options.getString('게임');
             const players = interaction.options.getInteger('인원');
-            const description = interaction.options.getString('설명') || '추가 설명이 없습니다.';
+            const description = interaction.options.getString('설명');
+            const duration = interaction.options.getInteger('기간');
+            const endTime = Date.now() + (duration * 60 * 1000);
 
             const messageId = Date.now().toString();
             gameParticipants.set(messageId, {
                 host: interaction.member.displayName,
+                hostId: interaction.member.id,
                 participants: [interaction.member.displayName],
-                maxPlayers: players
+                participantIds: [interaction.member.id],
+                maxPlayers: players,
+                endTime: endTime,
+                game: game,
+                duration: duration // 시간값 저장
             });
 
             const embed = new EmbedBuilder()
@@ -85,18 +101,12 @@ client.on('interactionCreate', async interaction => {
                     { name: '모집자', value: interaction.member.displayName, inline: true },
                     { name: '모집 인원', value: `${players}명`, inline: true },
                     { name: '현재 인원', value: '1명', inline: true },
+                    { name: '남은 시간', value: `${duration}분`, inline: true },
                     { name: '설명', value: description },
                     { name: '참가자 목록', value: `1. ${interaction.member.displayName}` }
                 )
                 .setTimestamp();
 
-            // 모집 취소 버튼 (모집자용)
-            const cancelButton = new ButtonBuilder()
-                .setCustomId(`cancel_${messageId}`)
-                .setLabel('모집 취소하기')
-                .setStyle(ButtonStyle.Danger);
-
-            // 참가하기/도망가기 버튼 (참가자용)
             const joinButton = new ButtonBuilder()
                 .setCustomId(`join_${messageId}`)
                 .setLabel('참가하기')
@@ -107,10 +117,47 @@ client.on('interactionCreate', async interaction => {
                 .setLabel('도망가기')
                 .setStyle(ButtonStyle.Secondary);
 
+            const cancelButton = new ButtonBuilder()
+                .setCustomId(`cancel_${messageId}`)
+                .setLabel('모집 취소하기')
+                .setStyle(ButtonStyle.Danger);
+
             const row = new ActionRowBuilder()
                 .addComponents(joinButton, leaveButton, cancelButton);
 
-            await interaction.reply({ embeds: [embed], components: [row] });
+            const reply = await interaction.reply({
+                embeds: [embed],
+                components: [row],
+                fetchReply: true
+            });
+
+            // 타이머 설정
+            setTimeout(async () => {
+                const gameData = gameParticipants.get(messageId);
+                if (!gameData || gameData.participants.length >= gameData.maxPlayers) return;
+
+                const timeoutEmbed = EmbedBuilder.from(embed)
+                    .setColor('#ff0000')
+                    .setTitle('⏰ 시간 초과로 모집이 종료되었습니다!')
+                    .spliceFields(3, 1, { name: '남은 시간', value: '종료', inline: true });
+
+                const disabledRow = new ActionRowBuilder()
+                    .addComponents(
+                        row.components.map(button =>
+                            ButtonBuilder.from(button).setDisabled(true)
+                        )
+                    );
+
+                await interaction.channel.send({
+                    content: '⏰ 시간이 초과되어 파티가 해산되었습니다.',
+                    embeds: [timeoutEmbed]
+                });
+
+                await interaction.editReply({
+                    embeds: [timeoutEmbed],
+                    components: [disabledRow]
+                });
+            }, duration * 60 * 1000);
         }
     }
 
@@ -205,7 +252,7 @@ client.on('interactionCreate', async interaction => {
         // 인원이 다 찼는지 확인
         if (gameData.participants.length === gameData.maxPlayers) {
             const embed = EmbedBuilder.from(interaction.message.embeds[0])
-                .setColor('#00ff00')  // 초록색으로 변경
+                .setColor('#00ff00')
                 .setTitle('✅ 모집 완료!')
                 .spliceFields(2, 1, {
                     name: '현재 인원',
@@ -225,12 +272,23 @@ client.on('interactionCreate', async interaction => {
                     )
                 );
 
-            // 모집 완료 메시지 전송 및 임베드 업데이트
+            // 채널에 완료 메시지 전송
             await interaction.channel.send({
                 content: `${gameData.participants.map(p => `<@${interaction.member.id}>`).join(', ')}\n모집이 완료되었습니다! 게임을 시작하세요! 🎮`,
-                embeds: [embed],
-                components: [disabledRow]
+                embeds: [embed]
             });
+
+            // 참가자들에게 개인 메시지 전송
+            for (let i = 0; i < gameData.participantIds.length; i++) {
+                try {
+                    const user = await client.users.fetch(gameData.participantIds[i]);
+                    await user.send({
+                        content: `🎮 ${gameData.game} 파티 모집이 완료되었습니다!\n참가자: ${gameData.participants.join(', ')}\n게임 시작 준비를 해주세요!`,
+                    });
+                } catch (error) {
+                    console.error(`Failed to send DM to ${gameData.participants[i]}:`, error);
+                }
+            }
 
             await interaction.update({ embeds: [embed], components: [disabledRow] });
             return;

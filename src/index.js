@@ -73,6 +73,7 @@ client.on('interactionCreate', async interaction => {
 
             const messageId = Date.now().toString();
             gameParticipants.set(messageId, {
+                host: interaction.member.displayName,
                 participants: [interaction.member.displayName],
                 maxPlayers: players
             });
@@ -81,6 +82,7 @@ client.on('interactionCreate', async interaction => {
                 .setColor('#0099ff')
                 .setTitle(`🎮 ${game} 모집 중!`)
                 .addFields(
+                    { name: '모집자', value: interaction.member.displayName, inline: true },
                     { name: '모집 인원', value: `${players}명`, inline: true },
                     { name: '현재 인원', value: '1명', inline: true },
                     { name: '설명', value: description },
@@ -88,6 +90,13 @@ client.on('interactionCreate', async interaction => {
                 )
                 .setTimestamp();
 
+            // 모집 취소 버튼 (모집자용)
+            const cancelButton = new ButtonBuilder()
+                .setCustomId(`cancel_${messageId}`)
+                .setLabel('모집 취소하기')
+                .setStyle(ButtonStyle.Danger);
+
+            // 참가하기/도망가기 버튼 (참가자용)
             const joinButton = new ButtonBuilder()
                 .setCustomId(`join_${messageId}`)
                 .setLabel('참가하기')
@@ -95,11 +104,11 @@ client.on('interactionCreate', async interaction => {
 
             const leaveButton = new ButtonBuilder()
                 .setCustomId(`leave_${messageId}`)
-                .setLabel('취소하기')
-                .setStyle(ButtonStyle.Danger);
+                .setLabel('도망가기')
+                .setStyle(ButtonStyle.Secondary);
 
             const row = new ActionRowBuilder()
-                .addComponents(joinButton, leaveButton);
+                .addComponents(joinButton, leaveButton, cancelButton);
 
             await interaction.reply({ embeds: [embed], components: [row] });
         }
@@ -111,7 +120,42 @@ client.on('interactionCreate', async interaction => {
         const gameData = gameParticipants.get(messageId);
         if (!gameData) return;
 
+        // 모집 취소 처리 (모집자 전용)
+        if (action === 'cancel') {
+            if (interaction.member.displayName !== gameData.host) {
+                await interaction.reply({
+                    content: '모집자만 모집을 취소할 수 있습니다!',
+                    ephemeral: true
+                });
+                return;
+            }
+
+            const embed = EmbedBuilder.from(interaction.message.embeds[0])
+                .setColor('#ff0000')
+                .setTitle('❌ 모집이 취소되었습니다');
+
+            // 모든 버튼 비활성화
+            const disabledRow = new ActionRowBuilder()
+                .addComponents(
+                    interaction.message.components[0].components.map(button =>
+                        ButtonBuilder.from(button).setDisabled(true)
+                    )
+                );
+
+            await interaction.update({ embeds: [embed], components: [disabledRow] });
+            return;
+        }
+
         if (action === 'join') {
+            // 모집자는 참가할 수 없음
+            if (interaction.member.displayName === gameData.host) {
+                await interaction.reply({
+                    content: '모집자는 이미 참가되어 있습니다!',
+                    ephemeral: true
+                });
+                return;
+            }
+
             // 이미 참가한 사람인지 확인
             if (gameData.participants.includes(interaction.member.displayName)) {
                 await interaction.reply({
@@ -134,6 +178,15 @@ client.on('interactionCreate', async interaction => {
             gameData.participants.push(interaction.member.displayName);
         }
         else if (action === 'leave') {
+            // 모집자는 나갈 수 없음
+            if (interaction.member.displayName === gameData.host) {
+                await interaction.reply({
+                    content: '모집자는 나갈 수 없습니다! 대신 모집을 취소할 수 있습니다.',
+                    ephemeral: true
+                });
+                return;
+            }
+
             // 참가하지 않은 사람인지 확인
             if (!gameData.participants.includes(interaction.member.displayName)) {
                 await interaction.reply({
@@ -151,12 +204,12 @@ client.on('interactionCreate', async interaction => {
 
         // 임베드 업데이트
         const embed = EmbedBuilder.from(interaction.message.embeds[0])
-            .spliceFields(1, 1, {
+            .spliceFields(2, 1, {
                 name: '현재 인원',
                 value: `${gameData.participants.length}명`,
                 inline: true
             })
-            .spliceFields(3, 1, {
+            .spliceFields(4, 1, {
                 name: '참가자 목록',
                 value: gameData.participants.length > 0
                     ? gameData.participants.map((p, i) => `${i + 1}. ${p}`).join('\n')

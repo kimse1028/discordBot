@@ -1,0 +1,43 @@
+# Node
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+package-lock.json
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+.idea_modules/
+
+# VSCode (혹시 나중에 사용할 수 있으니)
+.vscode/
+
+# Logs
+logs
+*.log
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Mac
+.DS_Store
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# 디버그 파일
+debug/
+debug.log

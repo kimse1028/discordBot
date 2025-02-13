@@ -136,27 +136,37 @@ client.on('interactionCreate', async interaction => {
                 const gameData = gameParticipants.get(messageId);
                 if (!gameData || gameData.participants.length >= gameData.maxPlayers) return;
 
-                const timeoutEmbed = EmbedBuilder.from(embed)
-                    .setColor('#ff0000')
-                    .setTitle('⏰ 시간 초과로 모집이 종료되었습니다!')
-                    .spliceFields(3, 1, { name: '남은 시간', value: '종료', inline: true });
+                try {
+                    const timeoutEmbed = EmbedBuilder.from(embed)
+                        .setColor('#ff0000')
+                        .setTitle('⏰ 시간 초과로 모집이 종료되었습니다!')
+                        .spliceFields(3, 1, { name: '남은 시간', value: '종료', inline: true });
 
-                const disabledRow = new ActionRowBuilder()
-                    .addComponents(
-                        row.components.map(button =>
-                            ButtonBuilder.from(button).setDisabled(true)
-                        )
-                    );
+                    const disabledRow = new ActionRowBuilder()
+                        .addComponents(
+                            row.components.map(button =>
+                                ButtonBuilder.from(button).setDisabled(true)
+                            )
+                        );
 
-                await interaction.channel.send({
-                    content: '⏰ 시간이 초과되어 파티가 해산되었습니다.',
-                    embeds: [timeoutEmbed]
-                });
+                    // 새 메시지로 시간 초과 알림
+                    await interaction.channel.send({
+                        content: '⏰ 시간이 초과되어 파티가 해산되었습니다.',
+                        embeds: [timeoutEmbed]
+                    });
 
-                await interaction.editReply({
-                    embeds: [timeoutEmbed],
-                    components: [disabledRow]
-                });
+                    try {
+                        // 원본 메시지 수정 시도
+                        await interaction.editReply({
+                            embeds: [timeoutEmbed],
+                            components: [disabledRow]
+                        });
+                    } catch (error) {
+                        console.log('원본 메시지 수정 실패 - 이미 삭제되었거나 접근 불가능한 메시지일 수 있습니다.');
+                    }
+                } catch (error) {
+                    console.error('시간 초과 처리 중 에러 발생:', error);
+                }
             }, duration * 60 * 1000);
         }
     }
@@ -259,7 +269,7 @@ client.on('interactionCreate', async interaction => {
                     value: `${gameData.participants.length}명`,
                     inline: true
                 })
-                .spliceFields(4, 1, {
+                .spliceFields(3, 1, {
                     name: '참가자 목록',
                     value: gameData.participants.map((p, i) => `${i + 1}. ${p}`).join('\n')
                 });
@@ -301,7 +311,7 @@ client.on('interactionCreate', async interaction => {
                 value: `${gameData.participants.length}명`,
                 inline: true
             })
-            .spliceFields(4, 1, {
+            .spliceFields(3, 1, {
                 name: '참가자 목록',
                 value: gameData.participants.map((p, i) => `${i + 1}. ${p}`).join('\n')
             });

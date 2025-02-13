@@ -7,7 +7,8 @@ const {
     ButtonBuilder,
     ButtonStyle,
     SlashCommandBuilder,
-    EmbedBuilder
+    EmbedBuilder,
+    PermissionsBitField
 } = require('discord.js');
 const dotenv = require('dotenv');
 
@@ -49,6 +50,10 @@ const commands = [
                 .setRequired(true)
                 .setMinValue(1)
                 .setMaxValue(180))
+        .addBooleanOption(option =>
+            option.setName('전체알림')
+                .setDescription('@everyone으로 전체 알림을 보낼지 선택하세요')
+                .setRequired(true))
 ];
 
 // 준비되면 실행
@@ -82,6 +87,17 @@ client.on('interactionCreate', async interaction => {
             const players = interaction.options.getInteger('인원');
             const description = interaction.options.getString('설명');
             const duration = interaction.options.getInteger('기간');
+            const useEveryone = interaction.options.getBoolean('전체알림') ?? false;
+
+            // @everyone 권한 체크
+            if (useEveryone && !interaction.guild.members.me.permissions.has(PermissionsBitField.Flags.MentionEveryone)) {
+                await interaction.reply({
+                    content: '봇에 @everyone 권한이 없습니다. 서버 관리자에게 문의하세요.',
+                    ephemeral: true
+                });
+                return;
+            }
+
             const endTime = Date.now() + (duration * 60 * 1000);
 
             const messageId = Date.now().toString();
@@ -93,7 +109,8 @@ client.on('interactionCreate', async interaction => {
                 maxPlayers: players,
                 endTime: endTime,
                 game: game,
-                duration: duration
+                duration: duration,
+                useEveryone: useEveryone
             });
 
             const embed = new EmbedBuilder()
@@ -128,9 +145,11 @@ client.on('interactionCreate', async interaction => {
                 .addComponents(joinButton, leaveButton, cancelButton);
 
             const reply = await interaction.reply({
+                content: useEveryone ? '@everyone 게임 모집이다 쓰바라마들아!' : null,
                 embeds: [embed],
                 components: [row],
-                fetchReply: true
+                fetchReply: true,
+                allowedMentions: { parse: ['everyone'] }
             });
 
             // 타이머 설정
@@ -153,8 +172,11 @@ client.on('interactionCreate', async interaction => {
 
                     // 새 메시지로 시간 초과 알림
                     await interaction.channel.send({
-                        content: '⏰ 너가 안 와서 파티 터졌어!!!',
-                        embeds: [timeoutEmbed]
+                        content: gameData.useEveryone ?
+                            '@everyone\n⏰ 너가 안 와서 파티 터졌어!!!' :
+                            '⏰ 너가 안 와서 파티 터졌어!!!',
+                        embeds: [timeoutEmbed],
+                        allowedMentions: { parse: ['everyone'] }
                     });
 
                     try {
@@ -202,6 +224,14 @@ client.on('interactionCreate', async interaction => {
                 );
 
             await interaction.update({ embeds: [embed], components: [disabledRow] });
+
+            // 취소 알림 메시지
+            if (gameData.useEveryone) {
+                await interaction.channel.send({
+                    content: '@everyone\n❌ 모집이 취소되었다 쓰바라마!!',
+                    allowedMentions: { parse: ['everyone'] }
+                });
+            }
             return;
         }
 
@@ -290,8 +320,11 @@ client.on('interactionCreate', async interaction => {
             // 채널에 멘션으로 완료 메시지 전송
             const mentions = gameData.participantIds.map(id => `<@${id}>`).join(', ');
             await interaction.channel.send({
-                content: `${mentions}\n일나라! 모집 완료다! 게임하자 쓰바라마들아! 🎮`,
-                embeds: [embed]
+                content: gameData.useEveryone ?
+                    `@everyone\n${mentions}\n일나라! 모집 완료다! 게임하자 쓰바라마들아! 🎮` :
+                    `${mentions}\n일나라! 모집 완료다! 게임하자 쓰바라마들아! 🎮`,
+                embeds: [embed],
+                allowedMentions: { parse: ['everyone'], users: gameData.participantIds }
             });
 
             // 참가자들에게 개인 메시지 전송

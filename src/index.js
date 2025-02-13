@@ -202,6 +202,40 @@ client.on('interactionCreate', async interaction => {
             );
         }
 
+        // 인원이 다 찼는지 확인
+        if (gameData.participants.length === gameData.maxPlayers) {
+            const embed = EmbedBuilder.from(interaction.message.embeds[0])
+                .setColor('#00ff00')  // 초록색으로 변경
+                .setTitle('✅ 모집 완료!')
+                .spliceFields(2, 1, {
+                    name: '현재 인원',
+                    value: `${gameData.participants.length}명`,
+                    inline: true
+                })
+                .spliceFields(4, 1, {
+                    name: '참가자 목록',
+                    value: gameData.participants.map((p, i) => `${i + 1}. ${p}`).join('\n')
+                });
+
+            // 모든 버튼 비활성화
+            const disabledRow = new ActionRowBuilder()
+                .addComponents(
+                    interaction.message.components[0].components.map(button =>
+                        ButtonBuilder.from(button).setDisabled(true)
+                    )
+                );
+
+            // 모집 완료 메시지 전송 및 임베드 업데이트
+            await interaction.channel.send({
+                content: `${gameData.participants.map(p => `<@${interaction.member.id}>`).join(', ')}\n모집이 완료되었습니다! 게임을 시작하세요! 🎮`,
+                embeds: [embed],
+                components: [disabledRow]
+            });
+
+            await interaction.update({ embeds: [embed], components: [disabledRow] });
+            return;
+        }
+
         // 임베드 업데이트
         const embed = EmbedBuilder.from(interaction.message.embeds[0])
             .spliceFields(2, 1, {
@@ -211,9 +245,7 @@ client.on('interactionCreate', async interaction => {
             })
             .spliceFields(4, 1, {
                 name: '참가자 목록',
-                value: gameData.participants.length > 0
-                    ? gameData.participants.map((p, i) => `${i + 1}. ${p}`).join('\n')
-                    : '아직 참가자가 없습니다.'
+                value: gameData.participants.map((p, i) => `${i + 1}. ${p}`).join('\n')
             });
 
         await interaction.update({ embeds: [embed] });

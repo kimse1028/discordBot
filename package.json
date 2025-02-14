@@ -10,7 +10,8 @@
   },
   "dependencies": {
     "discord.js": "^14.14.1",
-    "dotenv": "^16.4.1"
+    "dotenv": "^16.4.1",
+    "firebase-admin": "^13.1.0"
   },
   "devDependencies": {
     "eslint-config-prettier": "^10.0.1",

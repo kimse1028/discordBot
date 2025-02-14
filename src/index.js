@@ -1,3 +1,6 @@
+const { db, gangchanWordsRef } = require("./db/firebase");
+const { isAdmin, setAdmin } = require("./db/firebase");
+
 const {
   Client,
   GatewayIntentBits,
@@ -64,6 +67,52 @@ const commands = [
         .setDescription("@everyone으로 전체 알림을 보낼지 선택하세요")
         .setRequired(true),
     ),
+  // commands 배열에 추가
+  new SlashCommandBuilder()
+    .setName("강찬어사전")
+    .setDescription("강찬어 사전을 검색하거나 목록을 확인합니다")
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName("검색")
+        .setDescription("단어를 검색합니다")
+        .addStringOption((option) =>
+          option
+            .setName("단어")
+            .setDescription("검색할 단어를 입력하세요")
+            .setRequired(true),
+        ),
+    )
+    .addSubcommand((subcommand) =>
+      subcommand
+        .setName("목록")
+        .setDescription("전체 강찬어 목록을 확인합니다"),
+    ),
+  new SlashCommandBuilder()
+    .setName("강찬어등록")
+    .setDescription("새로운 강찬어를 등록합니다 (관리자 전용)")
+    .addStringOption((option) =>
+      option.setName("단어").setDescription("등록할 단어").setRequired(true),
+    )
+    .addStringOption((option) =>
+      option.setName("의미").setDescription("단어의 의미").setRequired(true),
+    )
+    .addStringOption((option) =>
+      option.setName("예문").setDescription("단어 사용 예문").setRequired(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("분류")
+        .setDescription("단어의 분류 (감탄사, 동사, 명사 등)")
+        .setRequired(true)
+        .addChoices(
+          { name: "감탄사", value: "감탄사" },
+          { name: "동사", value: "동사" },
+          { name: "명사", value: "명사" },
+          { name: "형용사", value: "형용사" },
+          { name: "부사", value: "부사" },
+          { name: "기타", value: "기타" },
+        ),
+    ),
 ];
 
 // 게임 데이터와 타이머를 함께 관리
@@ -100,16 +149,36 @@ client.once("ready", async () => {
   try {
     console.log(`Logged in as ${client.user.tag}!`);
 
+    // 봇이 참여한 모든 서버 순회
+    client.guilds.cache.forEach(async (guild) => {
+      // 서버 소유자를 관리자로 설정
+      await setAdmin(guild.ownerId, guild.id);
+    });
+
     // 슬래시 커맨드 등록
     const rest = new REST({ version: "10" }).setToken(
       process.env.DISCORD_TOKEN,
     );
-    await rest.put(Routes.applicationCommands(client.user.id), {
-      body: commands,
-    });
-    console.log("슬래시 커맨드가 등록되었습니다!");
+    try {
+      await rest.put(Routes.applicationCommands(client.user.id), {
+        body: commands,
+      });
+      console.log("슬래시 커맨드가 등록되었습니다!");
+    } catch (error) {
+      console.error("슬래시 커맨드 등록 중 에러:", error);
+    }
   } catch (error) {
-    console.error("봇 초기화 중 에러 발생:", error);
+    console.error("봇 초기화 중 에러:", error);
+  }
+});
+
+// 새로운 서버에 봇이 초대되었을 때
+client.on("guildCreate", async (guild) => {
+  try {
+    // 새 서버의 소유자를 관리자로 설정
+    await setAdmin(guild.ownerId, guild.id);
+  } catch (error) {
+    console.error("새 서버 관리자 설정 중 에러:", error);
   }
 });
 
@@ -422,6 +491,204 @@ client.on("interactionCreate", async (interaction) => {
         });
 
       await interaction.update({ embeds: [embed] });
+    }
+
+    // 강찬어 등록
+    if (interaction.commandName === "강찬어등록") {
+      // 관리자 권한 체크
+      if (!(await isAdmin(interaction.user.id, interaction.guildId))) {
+        await interaction.reply({
+          content: "강찬어는 서버 주인만 등록할 수 있다 쓰바라마!",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      const word = interaction.options.getString("단어");
+      const meaning = interaction.options.getString("의미");
+      const example = interaction.options.getString("예문");
+      const category = interaction.options.getString("분류");
+
+      try {
+        // 기존 단어 검색
+        const wordDoc = await gangchanWordsRef.doc(word).get();
+
+        if (wordDoc.exists) {
+          const confirmRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`confirm_update_${word}`)
+              .setLabel("업데이트")
+              .setStyle(ButtonStyle.Primary),
+            new ButtonBuilder()
+              .setCustomId(`cancel_update_${word}`)
+              .setLabel("취소")
+              .setStyle(ButtonStyle.Secondary),
+          );
+
+          await interaction.reply({
+            content: "이미 존재하는 단어다! 업데이트 할까?",
+            components: [confirmRow],
+            ephemeral: true,
+          });
+          return;
+        }
+
+        // 새 단어 추가
+        await gangchanWordsRef.doc(word).set({
+          word,
+          meaning,
+          example,
+          category,
+          addedBy: interaction.user.tag,
+          addedAt: new Date(),
+          isActive: true,
+        });
+
+        const embed = new EmbedBuilder()
+          .setColor("#00ff00")
+          .setTitle("✅ 강찬어 등록 완료!")
+          .addFields(
+            { name: "단어", value: word },
+            { name: "의미", value: meaning },
+            { name: "예문", value: example },
+            { name: "분류", value: category },
+          );
+
+        await interaction.reply({ embeds: [embed] });
+      } catch (error) {
+        console.error("강찬어 등록 중 에러 발생:", error);
+        await interaction.reply({
+          content: "등록 중 에러가 발생했다 쓰바라마!",
+          ephemeral: true,
+        });
+      }
+    }
+
+    // 강찬어 검색
+    if (interaction.commandName === "강찬어사전") {
+      const subcommand = interaction.options.getSubcommand();
+
+      if (subcommand === "검색") {
+        const searchWord = interaction.options.getString("단어");
+
+        try {
+          const wordDoc = await gangchanWordsRef.doc(searchWord).get();
+
+          if (!wordDoc.exists || !wordDoc.data().isActive) {
+            await interaction.reply({
+              content: "그런 단어는 없다 쓰바라마!",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const wordData = wordDoc.data();
+          const embed = new EmbedBuilder()
+            .setColor("#0099ff")
+            .setTitle(`📚 ${searchWord}`)
+            .addFields(
+              { name: "의미", value: wordData.meaning },
+              { name: "예문", value: wordData.example },
+              { name: "분류", value: wordData.category },
+            )
+            .setFooter({ text: "강찬어 사전 Ver 1.0" });
+
+          await interaction.reply({ embeds: [embed] });
+        } catch (error) {
+          console.error("강찬어 검색 중 에러 발생:", error);
+          await interaction.reply({
+            content: "검색 중 에러가 발생했다 쓰바라마!",
+            ephemeral: true,
+          });
+        }
+        if (interaction.isButton()) {
+          if (interaction.customId.startsWith("confirm_update_")) {
+            const word = interaction.customId.replace("confirm_update_", "");
+            try {
+              const dictData = JSON.parse(
+                fs.readFileSync("gangchan-dict.json", "utf8"),
+              );
+
+              // 단어 업데이트
+              dictData.words[word] = {
+                meaning: interaction.options.getString("의미"),
+                example: interaction.options.getString("예문"),
+                category: interaction.options.getString("분류"),
+                updatedBy: interaction.user.tag,
+                updatedAt: new Date().toISOString(),
+                originalAddedBy: dictData.words[word].addedBy,
+                originalAddedAt: dictData.words[word].addedAt,
+              };
+
+              fs.writeFileSync(
+                "gangchan-dict.json",
+                JSON.stringify(dictData, null, 2),
+              );
+
+              const embed = new EmbedBuilder()
+                .setColor("#00ff00")
+                .setTitle("✅ 강찬어 업데이트 완료!")
+                .addFields(
+                  { name: "단어", value: word },
+                  { name: "의미", value: dictData.words[word].meaning },
+                  { name: "예문", value: dictData.words[word].example },
+                  { name: "분류", value: dictData.words[word].category },
+                );
+
+              await interaction.update({
+                embeds: [embed],
+                components: [],
+              });
+            } catch (error) {
+              console.error("강찬어 업데이트 중 에러 발생:", error);
+              await interaction.update({
+                content: "업데이트 중 에러가 발생했다 쓰바라마!",
+                components: [],
+              });
+            }
+          } else if (interaction.customId.startsWith("cancel_update_")) {
+            await interaction.update({
+              content: "업데이트가 취소되었다!",
+              components: [],
+            });
+          }
+        }
+      } else if (subcommand === "목록") {
+        try {
+          const snapshot = await gangchanWordsRef
+            .where("isActive", "==", true)
+            .get();
+          const categories = {};
+
+          snapshot.forEach((doc) => {
+            const wordData = doc.data();
+            if (!categories[wordData.category]) {
+              categories[wordData.category] = [];
+            }
+            categories[wordData.category].push(wordData.word);
+          });
+
+          const embed = new EmbedBuilder()
+            .setColor("#0099ff")
+            .setTitle("📚 강찬어 사전 전체 목록")
+            .setDescription("카테고리별 강찬어 목록입니다.");
+
+          Object.entries(categories).forEach(([category, wordList]) => {
+            embed.addFields({
+              name: `${category} (${wordList.length}개)`,
+              value: wordList.join(", "),
+            });
+          });
+
+          await interaction.reply({ embeds: [embed] });
+        } catch (error) {
+          console.error("강찬어 목록 조회 중 에러 발생:", error);
+          await interaction.reply({
+            content: "목록 조회 중 에러가 발생했다 쓰바라마!",
+            ephemeral: true,
+          });
+        }
+      }
     }
   } catch (error) {
     console.error("Interaction 처리 중 에러 발생:", error);

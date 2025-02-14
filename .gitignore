@@ -41,3 +41,6 @@ Desktop.ini
 # 디버그 파일
 debug/
 debug.log
+
+# .gitignore
+src/db/serviceAccountKey.json

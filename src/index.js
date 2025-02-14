@@ -144,7 +144,7 @@ client.on('interactionCreate', async interaction => {
                 .addComponents(joinButton, leaveButton, cancelButton);
 
             const reply = await interaction.reply({
-                content: useEveryone ? '@everyone 게임 모집이다 쓰바라마들아!' : null,
+                content: useEveryone ? '@everyone 인원 모집이다!!' : null,
                 embeds: [embed],
                 components: [row],
                 fetchReply: true,
@@ -159,7 +159,7 @@ client.on('interactionCreate', async interaction => {
                 try {
                     const timeoutEmbed = EmbedBuilder.from(embed)
                         .setColor('#ff0000')
-                        .setTitle('⏰ 시간 초과 쓰바라마드라!')
+                        .setTitle('⏰ 시간 초과 !!!')
                         .spliceFields(3, 1, { name: '남은 시간', value: '종료', inline: true });
 
                     const disabledRow = new ActionRowBuilder()
@@ -212,7 +212,7 @@ client.on('interactionCreate', async interaction => {
 
             const embed = EmbedBuilder.from(interaction.message.embeds[0])
                 .setColor('#ff0000')
-                .setTitle('❌ 모집이 취소했다 쓰바라마!!');
+                .setTitle('❌ 모집이 취소됐다!!');
 
             // 모든 버튼 비활성화
             const disabledRow = new ActionRowBuilder()
@@ -227,7 +227,7 @@ client.on('interactionCreate', async interaction => {
             // 취소 알림 메시지
             if (gameData.useEveryone) {
                 await interaction.channel.send({
-                    content: '❌ 모집이 취소되었다 쓰바라마!!',
+                    content: '❌ 모집이 취소됐다!!',
                 });
             }
             return;
@@ -237,7 +237,7 @@ client.on('interactionCreate', async interaction => {
             // 모집자는 참가할 수 없음
             if (interaction.member.id === gameData.hostId) {
                 await interaction.reply({
-                    content: '니는 모집자잖아 모지리쓰바라마!',
+                    content: '니는 모집자잖아 쓰바라마!',
                     ephemeral: true
                 });
                 return;
@@ -246,7 +246,7 @@ client.on('interactionCreate', async interaction => {
             // 이미 참가한 사람인지 확인
             if (gameData.participantIds.includes(interaction.member.id)) {
                 await interaction.reply({
-                    content: '이미 참가했는데 와누르노 쓰바라마!',
+                    content: '니는 이미 참가했는데 쓰바라마!',
                     ephemeral: true
                 });
                 return;
@@ -269,7 +269,7 @@ client.on('interactionCreate', async interaction => {
             // 모집자는 나갈 수 없음
             if (interaction.member.id === gameData.hostId) {
                 await interaction.reply({
-                    content: '니가 도망갈라카믄 우짜노 쓰바라마?',
+                    content: '히히 못 가!',
                     ephemeral: true
                 });
                 return;
@@ -296,7 +296,7 @@ client.on('interactionCreate', async interaction => {
         if (gameData.participants.length === gameData.maxPlayers) {
             const embed = EmbedBuilder.from(interaction.message.embeds[0])
                 .setColor('#00ff00')
-                .setTitle('✅ 모집 완료다 쓰바라마들아!')
+                .setTitle('✅ 모집 완료다!!')
                 .spliceFields(2, 1, {
                     name: '현재 인원',
                     value: `${gameData.participants.length}명`,
@@ -319,7 +319,7 @@ client.on('interactionCreate', async interaction => {
             const mentions = gameData.participantIds.map(id => `<@${id}>`).join(', ');
             await interaction.channel.send({
                 content:
-                    `${mentions}\n일나라! 모집 완료다! 게임하자 쓰바라마들아! 🎮`,
+                    `${mentions}\n모집 완료다!! 게임하자!! 🎮`,
                 embeds: [embed],
             });
 
@@ -328,7 +328,7 @@ client.on('interactionCreate', async interaction => {
                 try {
                     const user = await client.users.fetch(participantId);
                     await user.send({
-                        content: `🎮 ${gameData.game} 모집 완료 쓰바라마!!\n${gameData.participants.join(', ')}\n스끼야! 스@근~하게 드러온나!`,
+                        content: `🎮 ${gameData.game} 모집 완료!!\n${gameData.participants.join(', ')}\n 스@근~하게 드러온나!`,
                     });
                 } catch (error) {
                     console.error(`Failed to send DM to ${participantId}:`, error);

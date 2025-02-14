@@ -565,6 +565,7 @@ client.on("interactionCreate", async (interaction) => {
     }
 
     // 강찬어 검색
+    // 강찬어 검색과 목록 부분의 코드 변경
     if (interaction.commandName === "강찬어사전") {
       const subcommand = interaction.options.getSubcommand();
 
@@ -600,58 +601,6 @@ client.on("interactionCreate", async (interaction) => {
             content: "검색 중 에러가 발생했다 쓰바라마!",
             ephemeral: true,
           });
-        }
-        if (interaction.isButton()) {
-          if (interaction.customId.startsWith("confirm_update_")) {
-            const word = interaction.customId.replace("confirm_update_", "");
-            try {
-              const dictData = JSON.parse(
-                fs.readFileSync("gangchan-dict.json", "utf8"),
-              );
-
-              // 단어 업데이트
-              dictData.words[word] = {
-                meaning: interaction.options.getString("의미"),
-                example: interaction.options.getString("예문"),
-                category: interaction.options.getString("분류"),
-                updatedBy: interaction.user.tag,
-                updatedAt: new Date().toISOString(),
-                originalAddedBy: dictData.words[word].addedBy,
-                originalAddedAt: dictData.words[word].addedAt,
-              };
-
-              fs.writeFileSync(
-                "gangchan-dict.json",
-                JSON.stringify(dictData, null, 2),
-              );
-
-              const embed = new EmbedBuilder()
-                .setColor("#00ff00")
-                .setTitle("✅ 강찬어 업데이트 완료!")
-                .addFields(
-                  { name: "단어", value: word },
-                  { name: "의미", value: dictData.words[word].meaning },
-                  { name: "예문", value: dictData.words[word].example },
-                  { name: "분류", value: dictData.words[word].category },
-                );
-
-              await interaction.update({
-                embeds: [embed],
-                components: [],
-              });
-            } catch (error) {
-              console.error("강찬어 업데이트 중 에러 발생:", error);
-              await interaction.update({
-                content: "업데이트 중 에러가 발생했다 쓰바라마!",
-                components: [],
-              });
-            }
-          } else if (interaction.customId.startsWith("cancel_update_")) {
-            await interaction.update({
-              content: "업데이트가 취소되었다!",
-              components: [],
-            });
-          }
         }
       } else if (subcommand === "목록") {
         try {

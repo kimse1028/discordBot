@@ -1,4 +1,4 @@
-const { db, gangchanWordsRef } = require("./db/firebase");
+const { db, ggckWordsRef } = require("./db/firebase");
 const { isAdmin, setAdmin } = require("./db/firebase");
 
 const {
@@ -67,10 +67,10 @@ const commands = [
         .setDescription("@everyone으로 전체 알림을 보낼지 선택하세요")
         .setRequired(true),
     ),
-  // commands 배열에 추가
+  // GGCK어 사전
   new SlashCommandBuilder()
-    .setName("강찬어사전")
-    .setDescription("강찬어 사전을 검색하거나 목록을 확인합니다")
+    .setName("ggck어사전")
+    .setDescription("GGCK어 사전을 검색하거나 목록을 확인합니다")
     .addSubcommand((subcommand) =>
       subcommand
         .setName("검색")
@@ -85,11 +85,11 @@ const commands = [
     .addSubcommand((subcommand) =>
       subcommand
         .setName("목록")
-        .setDescription("전체 강찬어 목록을 확인합니다"),
+        .setDescription("전체 GGCK어 목록을 확인합니다"),
     ),
   new SlashCommandBuilder()
-    .setName("강찬어등록")
-    .setDescription("새로운 강찬어를 등록합니다 (관리자 전용)")
+    .setName("ggck어등록")
+    .setDescription("새로운 GGCK어를 등록합니다 (관리자 전용)")
     .addStringOption((option) =>
       option.setName("단어").setDescription("등록할 단어").setRequired(true),
     )
@@ -98,6 +98,12 @@ const commands = [
     )
     .addStringOption((option) =>
       option.setName("예문").setDescription("단어 사용 예문").setRequired(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("창시자")
+        .setDescription("의미 만든 사람")
+        .setRequired(true),
     )
     .addStringOption((option) =>
       option
@@ -493,12 +499,12 @@ client.on("interactionCreate", async (interaction) => {
       await interaction.update({ embeds: [embed] });
     }
 
-    // 강찬어 등록
-    if (interaction.commandName === "강찬어등록") {
+    // GGCK어 등록
+    if (interaction.commandName === "ggck어등록") {
       // 관리자 권한 체크
       if (!(await isAdmin(interaction.user.id, interaction.guildId))) {
         await interaction.reply({
-          content: "강찬어는 서버 주인만 등록할 수 있다 쓰바라마!",
+          content: "GGCK어는 서버 주인만 등록할 수 있다 쓰바라마!",
           ephemeral: true,
         });
         return;
@@ -507,11 +513,12 @@ client.on("interactionCreate", async (interaction) => {
       const word = interaction.options.getString("단어");
       const meaning = interaction.options.getString("의미");
       const example = interaction.options.getString("예문");
+      const creator = interaction.options.getString("창시자");
       const category = interaction.options.getString("분류");
 
       try {
         // 기존 단어 검색
-        const wordDoc = await gangchanWordsRef.doc(word).get();
+        const wordDoc = await ggckWordsRef.doc(word).get();
 
         if (wordDoc.exists) {
           const confirmRow = new ActionRowBuilder().addComponents(
@@ -534,11 +541,12 @@ client.on("interactionCreate", async (interaction) => {
         }
 
         // 새 단어 추가
-        await gangchanWordsRef.doc(word).set({
+        await ggckWordsRef.doc(word).set({
           word,
           meaning,
           example,
           category,
+          creator: creator,
           addedBy: interaction.user.tag,
           addedAt: new Date(),
           isActive: true,
@@ -546,17 +554,18 @@ client.on("interactionCreate", async (interaction) => {
 
         const embed = new EmbedBuilder()
           .setColor("#00ff00")
-          .setTitle("✅ 강찬어 등록 완료!")
+          .setTitle("✅ GGCK어 등록 완료!")
           .addFields(
             { name: "단어", value: word },
             { name: "의미", value: meaning },
             { name: "예문", value: example },
+            { name: "창시자", value: creator },
             { name: "분류", value: category },
           );
 
         await interaction.reply({ embeds: [embed] });
       } catch (error) {
-        console.error("강찬어 등록 중 에러 발생:", error);
+        console.error("GGCK어 등록 중 에러 발생:", error);
         await interaction.reply({
           content: "등록 중 에러가 발생했다 쓰바라마!",
           ephemeral: true,
@@ -564,16 +573,16 @@ client.on("interactionCreate", async (interaction) => {
       }
     }
 
-    // 강찬어 검색
-    // 강찬어 검색과 목록 부분의 코드 변경
-    if (interaction.commandName === "강찬어사전") {
+    // GGCK어 검색
+    // GGCK어 검색과 목록 부분의 코드 변경
+    if (interaction.commandName === "ggck어사전") {
       const subcommand = interaction.options.getSubcommand();
 
       if (subcommand === "검색") {
         const searchWord = interaction.options.getString("단어");
 
         try {
-          const wordDoc = await gangchanWordsRef.doc(searchWord).get();
+          const wordDoc = await ggckWordsRef.doc(searchWord).get();
 
           if (!wordDoc.exists || !wordDoc.data().isActive) {
             await interaction.reply({
@@ -590,13 +599,14 @@ client.on("interactionCreate", async (interaction) => {
             .addFields(
               { name: "의미", value: wordData.meaning },
               { name: "예문", value: wordData.example },
+              { name: "창시자", value: wordData.creator },
               { name: "분류", value: wordData.category },
             )
-            .setFooter({ text: "강찬어 사전 Ver 1.0" });
+            .setFooter({ text: "GGCK어 사전 Ver 1.0" });
 
           await interaction.reply({ embeds: [embed] });
         } catch (error) {
-          console.error("강찬어 검색 중 에러 발생:", error);
+          console.error("GGCK어 검색 중 에러 발생:", error);
           await interaction.reply({
             content: "검색 중 에러가 발생했다 쓰바라마!",
             ephemeral: true,
@@ -604,7 +614,7 @@ client.on("interactionCreate", async (interaction) => {
         }
       } else if (subcommand === "목록") {
         try {
-          const snapshot = await gangchanWordsRef
+          const snapshot = await ggckWordsRef
             .where("isActive", "==", true)
             .get();
           const categories = {};
@@ -619,8 +629,8 @@ client.on("interactionCreate", async (interaction) => {
 
           const embed = new EmbedBuilder()
             .setColor("#0099ff")
-            .setTitle("📚 강찬어 사전 전체 목록")
-            .setDescription("카테고리별 강찬어 목록입니다.");
+            .setTitle("📚 GGCK어 사전 전체 목록")
+            .setDescription("카테고리별 GGCK어 목록입니다.");
 
           Object.entries(categories).forEach(([category, wordList]) => {
             embed.addFields({
@@ -631,7 +641,7 @@ client.on("interactionCreate", async (interaction) => {
 
           await interaction.reply({ embeds: [embed] });
         } catch (error) {
-          console.error("강찬어 목록 조회 중 에러 발생:", error);
+          console.error("GGCK어 목록 조회 중 에러 발생:", error);
           await interaction.reply({
             content: "목록 조회 중 에러가 발생했다 쓰바라마!",
             ephemeral: true,

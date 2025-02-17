@@ -253,7 +253,7 @@ function setGameTimer(client, messageId, gameData, scheduledTime) {
             .join(" ");
 
           await channel.send({
-            content: `[${currentGameData.game}] 해야지 ${participantMentions} 자식들아!! 들어와라!!`,
+            content: `${currentGameData.game} 해야지 ${participantMentions} 자식들아!! 들어와라!!`,
             allowedMentions: { users: currentGameData.participantIds },
           });
 

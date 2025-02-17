@@ -55,11 +55,35 @@ const commands = [
     )
     .addIntegerOption((option) =>
       option
-        .setName("기간")
-        .setDescription("모집 기간 분 단위(최대180분) 입력하세요")
+        .setName("월")
+        .setDescription("예약할 월을 입력하세요")
         .setRequired(true)
         .setMinValue(1)
-        .setMaxValue(180),
+        .setMaxValue(12),
+    )
+    .addIntegerOption((option) =>
+      option
+        .setName("일")
+        .setDescription("예약할 일을 입력하세요")
+        .setRequired(true)
+        .setMinValue(1)
+        .setMaxValue(31),
+    )
+    .addIntegerOption((option) =>
+      option
+        .setName("시")
+        .setDescription("예약할 시간을 입력하세요 (24시간)")
+        .setRequired(true)
+        .setMinValue(0)
+        .setMaxValue(23),
+    )
+    .addIntegerOption((option) =>
+      option
+        .setName("분")
+        .setDescription("예약할 분을 입력하세요")
+        .setRequired(true)
+        .setMinValue(0)
+        .setMaxValue(59),
     )
     .addBooleanOption((option) =>
       option
@@ -127,12 +151,20 @@ const gameTimers = new Map();
 
 // 게임 데이터 정리 함수
 function cleanupGame(messageId) {
-  // 타이머가 있다면 제거
+  // 10분 전 알림 타이머 정리
+  const preTimer = gameTimers.get(`${messageId}_pre`);
+  if (preTimer) {
+    clearTimeout(preTimer);
+    gameTimers.delete(`${messageId}_pre`);
+  }
+
+  // 게임 시작 타이머 정리
   const timer = gameTimers.get(messageId);
   if (timer) {
     clearTimeout(timer);
     gameTimers.delete(messageId);
   }
+
   // 게임 데이터 제거
   gameParticipants.delete(messageId);
 }
@@ -199,25 +231,67 @@ client.on("interactionCreate", async (interaction) => {
         const game = interaction.options.getString("게임");
         const players = interaction.options.getInteger("인원");
         const description = interaction.options.getString("설명");
-        const duration = interaction.options.getInteger("기간");
+        const month = interaction.options.getInteger("월");
+        const day = interaction.options.getInteger("일");
+        const hour = interaction.options.getInteger("시");
+        const minute = interaction.options.getInteger("분");
         const useEveryone = interaction.options.getBoolean("전체알림") ?? false;
 
-        // @everyone 권한 체크
-        if (
-          useEveryone &&
-          !interaction.guild.members.me.permissions.has(
-            PermissionsBitField.Flags.MentionEveryone,
-          )
-        ) {
+        // 현재 년도 가져오기
+        const currentYear = new Date().getFullYear();
+        const now = new Date();
+
+        // 날짜 유효성 검사 함수
+        function isValidDate(date) {
+          // 현재 시간보다 최소 10분 이후만 예약 가능하도록
+          const minTime = new Date();
+          minTime.setMinutes(minTime.getMinutes() + 10);
+
+          return (
+            date instanceof Date &&
+            !isNaN(date) &&
+            date.getMonth() === month - 1 &&
+            date.getDate() === day &&
+            date > minTime
+          );
+        }
+
+        // 날짜 유효성 검사
+        const scheduledDate = new Date(
+          currentYear,
+          month - 1,
+          day,
+          hour,
+          minute,
+        );
+
+        // 입력된 날짜가 올해의 과거인 경우, 내년으로 설정
+        if (scheduledDate < now) {
+          scheduledDate.setFullYear(currentYear + 1);
+        }
+
+        // 날짜 유효성 검사
+        if (!isValidDate(scheduledDate)) {
           await interaction.reply({
             content:
-              "봇에 @everyone 권한이 없습니다. 서버 관리자에게 문의하세요.",
+              "유효하지 않은 날짜입니다! (현재 시간 이후, 30일 이내만 가능)",
             ephemeral: true,
           });
           return;
         }
 
-        const endTime = Date.now() + duration * 60 * 1000;
+        // 30일 이상 먼 미래는 예약 불가
+        const thirtyDaysLater = new Date(
+          now.getTime() + 30 * 24 * 60 * 60 * 1000,
+        );
+        if (scheduledDate > thirtyDaysLater) {
+          await interaction.reply({
+            content: "30일 이후로는 예약할 수 없습니다!",
+            ephemeral: true,
+          });
+          return;
+        }
+
         const messageId = Date.now().toString();
 
         gameParticipants.set(messageId, {
@@ -226,11 +300,14 @@ client.on("interactionCreate", async (interaction) => {
           participants: [interaction.member.displayName],
           participantIds: [interaction.member.id],
           maxPlayers: players,
-          endTime: endTime,
+          scheduledTime: scheduledDate,
           game: game,
-          duration: duration,
           useEveryone: useEveryone,
         });
+
+        const formatDate = (date) => {
+          return `${date.getMonth() + 1}월 ${date.getDate()}일 ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+        };
 
         const embed = new EmbedBuilder()
           .setColor("#0099ff")
@@ -243,7 +320,11 @@ client.on("interactionCreate", async (interaction) => {
             },
             { name: "모집 인원", value: `${players}명`, inline: true },
             { name: "현재 인원", value: "1명", inline: true },
-            { name: "남은 시간", value: `${duration}분`, inline: true },
+            {
+              name: "예약 시간",
+              value: formatDate(scheduledDate),
+              inline: true,
+            },
             { name: "설명", value: description },
           )
           .setTimestamp();
@@ -271,62 +352,112 @@ client.on("interactionCreate", async (interaction) => {
           allowedMentions: { parse: ["everyone"] },
         });
 
-        // 타이머 설정 및 저장
-        const timer = setTimeout(
-          async () => {
+        // 10분 전 알림 타이머 설정
+        const preNotificationTime = new Date(
+          scheduledDate.getTime() - 10 * 60 * 1000,
+        );
+        const timeUntilPreNotification =
+          preNotificationTime.getTime() - Date.now();
+
+        if (timeUntilPreNotification > 0) {
+          const preNotificationTimer = setTimeout(async () => {
             try {
               const gameData = gameParticipants.get(messageId);
-              if (
-                !gameData ||
-                gameData.participants.length >= gameData.maxPlayers
-              ) {
-                cleanupGame(messageId);
-                return;
-              }
+              if (!gameData) return;
 
-              const timeoutEmbed = EmbedBuilder.from(embed)
-                .setColor("#ff0000")
-                .setTitle("⏰ 시간 초과 !!!")
-                .spliceFields(3, 1, {
-                  name: "남은 시간",
-                  value: "종료",
-                  inline: true,
-                });
+              // 알림 메시지 생성
+              const mentions = gameData.participantIds
+                .map((id) => `<@${id}>`)
+                .join(", ");
 
-              const disabledRow = new ActionRowBuilder().addComponents(
-                row.components.map((button) =>
-                  ButtonBuilder.from(button).setDisabled(true),
-                ),
-              );
-
-              // 새 메시지로 시간 초과 알림
+              // 채널에 알림 전송
               await interaction.channel.send({
-                content: gameData.useEveryone
-                  ? "⏰ 너가 안 와서 파티 터졌어!!!"
-                  : "⏰ 너가 안 와서 파티 터졌어!!!",
-                embeds: [timeoutEmbed],
-                allowedMentions: { parse: ["everyone"] },
+                content: `${mentions}\n⏰ 10분 후에 ${gameData.game} 시작이다!!`,
+                allowedMentions: { parse: ["users"] },
               });
 
-              try {
-                await interaction.editReply({
-                  embeds: [timeoutEmbed],
-                  components: [disabledRow],
-                });
-              } catch (error) {
-                console.log(
-                  "원본 메시지 수정 실패 - 이미 삭제되었거나 접근 불가능한 메시지일 수 있습니다.",
-                );
-              }
+              // DM 전송을 위한 참가자 정보 준비
+              const participantsList = gameData.participants.join(", ");
 
-              cleanupGame(messageId);
+              // 각 참가자에게 DM 전송
+              for (const participantId of gameData.participantIds) {
+                try {
+                  const user = await client.users.fetch(participantId);
+                  await user.send({
+                    content: `🎮 ${gameData.game} 10분 후 시작!!\n참가자: ${participantsList}\n스@근~하게 드러온나!`,
+                  });
+                } catch (dmError) {
+                  console.error(
+                    `Failed to send DM to ${participantId}:`,
+                    dmError,
+                  );
+                  // DM 전송 실패해도 계속 진행
+                  continue;
+                }
+              }
             } catch (error) {
-              console.error("시간 초과 처리 중 에러 발생:", error);
-              cleanupGame(messageId);
+              console.error("10분 전 알림 처리 중 에러 발생:", error);
             }
-          },
-          duration * 60 * 1000,
-        );
+          }, timeUntilPreNotification);
+
+          // 타이머 저장
+          gameTimers.set(`${messageId}_pre`, preNotificationTimer);
+        }
+
+        // 타이머 설정
+        const timeUntilScheduled = scheduledDate.getTime() - now.getTime();
+        const timer = setTimeout(async () => {
+          try {
+            const gameData = gameParticipants.get(messageId);
+            if (
+              !gameData ||
+              gameData.participants.length >= gameData.maxPlayers
+            ) {
+              cleanupGame(messageId);
+              return;
+            }
+
+            const timeoutEmbed = EmbedBuilder.from(embed)
+              .setColor("#ff0000")
+              .setTitle("⏰ 시간이 되었습니다!")
+              .spliceFields(3, 1, {
+                name: "상태",
+                value: "모집 마감",
+                inline: true,
+              });
+
+            const disabledRow = new ActionRowBuilder().addComponents(
+              row.components.map((button) =>
+                ButtonBuilder.from(button).setDisabled(true),
+              ),
+            );
+
+            // 새 메시지로 시간 초과 알림
+            await interaction.channel.send({
+              content: gameData.useEveryone
+                ? "⏰ 게임 시작 시간이다!!!"
+                : "⏰ 게임 시작 시간이다!!!",
+              embeds: [timeoutEmbed],
+              allowedMentions: { parse: ["everyone"] },
+            });
+
+            try {
+              await interaction.editReply({
+                embeds: [timeoutEmbed],
+                components: [disabledRow],
+              });
+            } catch (error) {
+              console.log(
+                "원본 메시지 수정 실패 - 이미 삭제되었거나 접근 불가능한 메시지일 수 있습니다.",
+              );
+            }
+
+            cleanupGame(messageId);
+          } catch (error) {
+            console.error("예약 시간 처리 중 에러 발생:", error);
+            cleanupGame(messageId);
+          }
+        }, timeUntilScheduled);
 
         gameTimers.set(messageId, timer);
       }
@@ -350,7 +481,25 @@ client.on("interactionCreate", async (interaction) => {
 
         const embed = EmbedBuilder.from(interaction.message.embeds[0])
           .setColor("#ff0000")
-          .setTitle("❌ 모집이 취소됐다!!");
+          .setTitle("❌ 모집이 취소됐다!!")
+          .setDescription("모집자가 예약을 취소했습니다.");
+
+        // 참가자들에게 DM으로 취소 알림
+        await Promise.all(
+          gameData.participantIds.map(async (participantId) => {
+            try {
+              const user = await client.users.fetch(participantId);
+              await user.send({
+                content: `❌ ${gameData.game} 예약이 취소되었습니다.`,
+              });
+            } catch (error) {
+              console.error(
+                `Failed to send cancellation DM to ${participantId}:`,
+                error,
+              );
+            }
+          }),
+        );
 
         const disabledRow = new ActionRowBuilder().addComponents(
           interaction.message.components[0].components.map((button) =>
@@ -455,24 +604,15 @@ client.on("interactionCreate", async (interaction) => {
         const mentions = gameData.participantIds
           .map((id) => `<@${id}>`)
           .join(", ");
+
+        const formatDate = (date) => {
+          return `${date.getMonth() + 1}월 ${date.getDate()}일 ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+        };
+
         await interaction.channel.send({
-          content: `${mentions}\n모집 완료다!! 게임하자!! 🎮`,
+          content: `${mentions}\n모집 완료다!! ${formatDate(gameData.scheduledTime)}까지 모여라!! 🎮`,
           embeds: [embed],
         });
-
-        // DM 전송을 Promise.all로 처리
-        await Promise.all(
-          gameData.participantIds.map(async (participantId) => {
-            try {
-              const user = await client.users.fetch(participantId);
-              await user.send({
-                content: `🎮 ${gameData.game} 모집 완료!!\n${gameData.participants.join(", ")}\n 스@근~하게 드러온나!`,
-              });
-            } catch (error) {
-              console.error(`Failed to send DM to ${participantId}:`, error);
-            }
-          }),
-        );
 
         await interaction.update({
           embeds: [embed],

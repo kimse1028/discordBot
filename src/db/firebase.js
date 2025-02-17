@@ -39,7 +39,7 @@ admin.initializeApp({
 });
 
 const db = admin.firestore();
-const gangchanWordsRef = db.collection("gangchanWords");
+const ggckWordsRef = db.collection("ggckWords");
 const adminSettingsRef = db.collection("adminSettings");
 
 // 관리자 체크 함수
@@ -70,4 +70,4 @@ async function setAdmin(userId, guildId) {
   }
 }
 
-module.exports = { db, gangchanWordsRef, adminSettingsRef, isAdmin, setAdmin };
+module.exports = { db, ggckWordsRef, adminSettingsRef, isAdmin, setAdmin };

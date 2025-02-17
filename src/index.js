@@ -1,4 +1,4 @@
-const { db, gangchanWordsRef } = require("./db/firebase");
+const { db, ggckWordsRef } = require("./db/firebase");
 const { isAdmin, setAdmin } = require("./db/firebase");
 
 const {
@@ -55,11 +55,35 @@ const commands = [
     )
     .addIntegerOption((option) =>
       option
-        .setName("기간")
-        .setDescription("모집 기간 분 단위(최대180분) 입력하세요")
+        .setName("월")
+        .setDescription("예약할 월을 입력하세요")
         .setRequired(true)
         .setMinValue(1)
-        .setMaxValue(180),
+        .setMaxValue(12),
+    )
+    .addIntegerOption((option) =>
+      option
+        .setName("일")
+        .setDescription("예약할 일을 입력하세요")
+        .setRequired(true)
+        .setMinValue(1)
+        .setMaxValue(31),
+    )
+    .addIntegerOption((option) =>
+      option
+        .setName("시")
+        .setDescription("예약할 시간을 입력하세요 (24시간)")
+        .setRequired(true)
+        .setMinValue(0)
+        .setMaxValue(23),
+    )
+    .addIntegerOption((option) =>
+      option
+        .setName("분")
+        .setDescription("예약할 분을 입력하세요")
+        .setRequired(true)
+        .setMinValue(0)
+        .setMaxValue(59),
     )
     .addBooleanOption((option) =>
       option
@@ -67,10 +91,10 @@ const commands = [
         .setDescription("@everyone으로 전체 알림을 보낼지 선택하세요")
         .setRequired(true),
     ),
-  // commands 배열에 추가
+  // GGCK어 사전
   new SlashCommandBuilder()
-    .setName("강찬어사전")
-    .setDescription("강찬어 사전을 검색하거나 목록을 확인합니다")
+    .setName("ggck어사전")
+    .setDescription("GGCK어 사전을 검색하거나 목록을 확인합니다")
     .addSubcommand((subcommand) =>
       subcommand
         .setName("검색")
@@ -85,11 +109,11 @@ const commands = [
     .addSubcommand((subcommand) =>
       subcommand
         .setName("목록")
-        .setDescription("전체 강찬어 목록을 확인합니다"),
+        .setDescription("전체 GGCK어 목록을 확인합니다"),
     ),
   new SlashCommandBuilder()
-    .setName("강찬어등록")
-    .setDescription("새로운 강찬어를 등록합니다 (관리자 전용)")
+    .setName("ggck어등록")
+    .setDescription("새로운 GGCK어를 등록합니다 (관리자 전용)")
     .addStringOption((option) =>
       option.setName("단어").setDescription("등록할 단어").setRequired(true),
     )
@@ -98,6 +122,12 @@ const commands = [
     )
     .addStringOption((option) =>
       option.setName("예문").setDescription("단어 사용 예문").setRequired(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("창시자")
+        .setDescription("의미 만든 사람")
+        .setRequired(true),
     )
     .addStringOption((option) =>
       option
@@ -118,17 +148,147 @@ const commands = [
 // 게임 데이터와 타이머를 함께 관리
 const gameParticipants = new Map();
 const gameTimers = new Map();
+const MAX_TIMEOUT = 2147483647; // 최대 setTimeout 지연시간 (약 24.8일)
 
 // 게임 데이터 정리 함수
 function cleanupGame(messageId) {
-  // 타이머가 있다면 제거
-  const timer = gameTimers.get(messageId);
-  if (timer) {
-    clearTimeout(timer);
+  const existingTimer = gameTimers.get(messageId);
+  if (existingTimer) {
+    clearTimeout(existingTimer);
     gameTimers.delete(messageId);
   }
-  // 게임 데이터 제거
   gameParticipants.delete(messageId);
+}
+
+// 긴 지연시간을 처리하기 위한 체이닝 타이머 함수
+function setLongTimeout(callback, delay) {
+  if (delay > MAX_TIMEOUT) {
+    return setTimeout(() => {
+      setLongTimeout(callback, delay - MAX_TIMEOUT);
+    }, MAX_TIMEOUT);
+  } else {
+    return setTimeout(callback, delay);
+  }
+}
+
+// 게임 알림 처리를 위한 함수
+async function sendGameNotifications(client, gameData, messageId) {
+  try {
+    if (!gameData) {
+      console.error("Game data not found for message ID:", messageId);
+      return;
+    }
+
+    // 참가자 목록 준비
+    const participantsList = gameData.participants.join(", ");
+    const notifications = [];
+
+    // 각 참가자에게 DM 전송
+    for (const participantId of gameData.participantIds) {
+      const notification = (async () => {
+        try {
+          const user = await client.users.fetch(participantId);
+          await user.send({
+            content: `🎮 ${gameData.game} 시작 시간이다!!\n참가자: ${participantsList}\n스@근~하게 드러온나!`,
+          });
+          console.log(`Successfully sent DM to ${participantId}`);
+        } catch (error) {
+          console.error(`Failed to send DM to ${participantId}:`, error);
+          // 에러 발생해도 다른 사용자에게는 계속 전송
+        }
+      })();
+      notifications.push(notification);
+    }
+
+    // 모든 DM 전송 완료 대기
+    await Promise.allSettled(notifications);
+
+    return true;
+  } catch (error) {
+    console.error("Error in sendGameNotifications:", error);
+    return false;
+  }
+}
+
+// 게임 타이머 설정 함수
+function setGameTimer(client, messageId, gameData, scheduledTime) {
+  const now = Date.now();
+  const timeUntilScheduled = scheduledTime.getTime() - now;
+
+  const timer = setLongTimeout(async () => {
+    try {
+      const currentGameData = gameParticipants.get(messageId);
+      if (!currentGameData) {
+        console.error("Game data not found:", messageId);
+        return;
+      }
+
+      // 채널에 알림 메시지
+      try {
+        const channel = await client.channels.fetch(currentGameData.channel);
+        if (currentGameData.participants.length < currentGameData.maxPlayers) {
+          // 인원이 부족한 경우
+          await channel.send({
+            content: "❌ 인원이 부족하여 게임이 취소되었습니다.",
+          });
+
+          // 참가했던 인원들에게 취소 DM 전송
+          for (const participantId of currentGameData.participantIds) {
+            try {
+              const user = await client.users.fetch(participantId);
+              await user.send({
+                content: `❌ ${currentGameData.game} 게임이 인원 부족으로 취소되었습니다.`,
+              });
+            } catch (error) {
+              console.error(
+                `Failed to send cancellation DM to ${participantId}:`,
+                error,
+              );
+            }
+          }
+        } else {
+          // 게임 시작 알림
+          const participantMentions = currentGameData.participantIds
+            .map((id) => `<@${id}>`)
+            .join(" ");
+
+          await channel.send({
+            content: `[${currentGameData.game}] 해야지 ${participantMentions} 자식들아!! 들어와라!!`,
+            allowedMentions: { users: currentGameData.participantIds },
+          });
+
+          // 참가자들에게 DM 전송
+          await sendGameNotifications(client, currentGameData, messageId);
+        }
+      } catch (error) {
+        console.error("Failed to send channel notification:", error);
+      }
+
+      // 모든 처리가 끝난 후에 정리
+      cleanupGame(messageId);
+    } catch (error) {
+      console.error("Error in game timer callback:", error);
+      cleanupGame(messageId);
+    }
+  }, timeUntilScheduled);
+
+  gameTimers.set(messageId, timer);
+}
+
+// 게임 생성 시 호출되는 함수
+function createGame(client, interaction, gameData) {
+  const messageId = Date.now().toString();
+
+  // 채널 ID 저장 추가
+  const enhancedGameData = {
+    ...gameData,
+    channel: interaction.channelId,
+  };
+
+  gameParticipants.set(messageId, enhancedGameData);
+  setGameTimer(client, messageId, enhancedGameData, gameData.scheduledTime);
+
+  return messageId;
 }
 
 // 주기적으로 만료된 게임 정리 (1시간마다)
@@ -193,38 +353,81 @@ client.on("interactionCreate", async (interaction) => {
         const game = interaction.options.getString("게임");
         const players = interaction.options.getInteger("인원");
         const description = interaction.options.getString("설명");
-        const duration = interaction.options.getInteger("기간");
+        const month = interaction.options.getInteger("월");
+        const day = interaction.options.getInteger("일");
+        const hour = interaction.options.getInteger("시");
+        const minute = interaction.options.getInteger("분");
         const useEveryone = interaction.options.getBoolean("전체알림") ?? false;
 
-        // @everyone 권한 체크
-        if (
-          useEveryone &&
-          !interaction.guild.members.me.permissions.has(
-            PermissionsBitField.Flags.MentionEveryone,
-          )
-        ) {
+        // 현재 년도 가져오기
+        const currentYear = new Date().getFullYear();
+        const now = new Date();
+
+        // 날짜 유효성 검사 함수
+        function isValidDate(date) {
+          // 현재 시간보다 최소 10분 이후만 예약 가능하도록
+          const minTime = new Date();
+          minTime.setMinutes(minTime.getMinutes());
+
+          return (
+            date instanceof Date &&
+            !isNaN(date) &&
+            date.getMonth() === month - 1 &&
+            date.getDate() === day &&
+            date > minTime
+          );
+        }
+
+        // 날짜 유효성 검사
+        const scheduledDate = new Date(
+          currentYear,
+          month - 1,
+          day,
+          hour,
+          minute,
+        );
+
+        // 입력된 날짜가 올해의 과거인 경우, 내년으로 설정
+        if (scheduledDate < now) {
+          scheduledDate.setFullYear(currentYear + 1);
+        }
+
+        // 날짜 유효성 검사
+        if (!isValidDate(scheduledDate)) {
           await interaction.reply({
             content:
-              "봇에 @everyone 권한이 없습니다. 서버 관리자에게 문의하세요.",
+              "유효하지 않은 날짜입니다! (현재 시간 이후, 10분 이후, 30일 이내만 가능)",
             ephemeral: true,
           });
           return;
         }
 
-        const endTime = Date.now() + duration * 60 * 1000;
-        const messageId = Date.now().toString();
+        // 30일 이상 먼 미래는 예약 불가
+        const thirtyDaysLater = new Date(
+          now.getTime() + 30 * 24 * 60 * 60 * 1000,
+        );
+        if (scheduledDate > thirtyDaysLater) {
+          await interaction.reply({
+            content: "30일 이후로는 예약할 수 없습니다!",
+            ephemeral: true,
+          });
+          return;
+        }
 
-        gameParticipants.set(messageId, {
+        const messageId = createGame(client, interaction, {
           host: interaction.member.displayName,
           hostId: interaction.member.id,
           participants: [interaction.member.displayName],
           participantIds: [interaction.member.id],
           maxPlayers: players,
-          endTime: endTime,
+          scheduledTime: scheduledDate,
           game: game,
-          duration: duration,
           useEveryone: useEveryone,
         });
+
+        const formatDate = (date) => {
+          return `${date.getMonth() + 1}월 ${date.getDate()}일 ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+        };
 
         const embed = new EmbedBuilder()
           .setColor("#0099ff")
@@ -237,7 +440,11 @@ client.on("interactionCreate", async (interaction) => {
             },
             { name: "모집 인원", value: `${players}명`, inline: true },
             { name: "현재 인원", value: "1명", inline: true },
-            { name: "남은 시간", value: `${duration}분`, inline: true },
+            {
+              name: "예약 시간",
+              value: formatDate(scheduledDate),
+              inline: true,
+            },
             { name: "설명", value: description },
           )
           .setTimestamp();
@@ -264,65 +471,331 @@ client.on("interactionCreate", async (interaction) => {
           fetchReply: true,
           allowedMentions: { parse: ["everyone"] },
         });
+      }
 
-        // 타이머 설정 및 저장
-        const timer = setTimeout(
-          async () => {
-            try {
-              const gameData = gameParticipants.get(messageId);
-              if (
-                !gameData ||
-                gameData.participants.length >= gameData.maxPlayers
-              ) {
-                cleanupGame(messageId);
-                return;
-              }
+      // 버튼 클릭 처리
+      if (interaction.isButton()) {
+        const [action, messageId] = interaction.customId.split("_");
+        const gameData = gameParticipants.get(messageId);
+        if (!gameData) return;
 
-              const timeoutEmbed = EmbedBuilder.from(embed)
-                .setColor("#ff0000")
-                .setTitle("⏰ 시간 초과 !!!")
-                .spliceFields(3, 1, {
-                  name: "남은 시간",
-                  value: "종료",
-                  inline: true,
-                });
+        // 모집 취소 처리
+        if (action === "cancel") {
+          if (interaction.member.id !== gameData.hostId) {
+            await interaction.reply({
+              content: "니가 만든거 아니자나 쓰바라마!",
+              ephemeral: true,
+            });
+            return;
+          }
 
-              const disabledRow = new ActionRowBuilder().addComponents(
-                row.components.map((button) =>
-                  ButtonBuilder.from(button).setDisabled(true),
-                ),
-              );
+          const embed = EmbedBuilder.from(interaction.message.embeds[0])
+            .setColor("#ff0000")
+            .setTitle("❌ 모집이 취소됐다!!")
+            .setDescription("모집자가 예약을 취소했습니다.");
 
-              // 새 메시지로 시간 초과 알림
-              await interaction.channel.send({
-                content: gameData.useEveryone
-                  ? "⏰ 너가 안 와서 파티 터졌어!!!"
-                  : "⏰ 너가 안 와서 파티 터졌어!!!",
-                embeds: [timeoutEmbed],
-                allowedMentions: { parse: ["everyone"] },
-              });
-
+          // 참가자들에게 DM으로 취소 알림
+          await Promise.all(
+            gameData.participantIds.map(async (participantId) => {
               try {
-                await interaction.editReply({
-                  embeds: [timeoutEmbed],
-                  components: [disabledRow],
+                const user = await client.users.fetch(participantId);
+                await user.send({
+                  content: `❌ ${gameData.game} 예약이 취소되었습니다.`,
                 });
               } catch (error) {
-                console.log(
-                  "원본 메시지 수정 실패 - 이미 삭제되었거나 접근 불가능한 메시지일 수 있습니다.",
+                console.error(
+                  `Failed to send cancellation DM to ${participantId}:`,
+                  error,
                 );
               }
+            }),
+          );
 
-              cleanupGame(messageId);
-            } catch (error) {
-              console.error("시간 초과 처리 중 에러 발생:", error);
-              cleanupGame(messageId);
+          const disabledRow = new ActionRowBuilder().addComponents(
+            interaction.message.components[0].components.map((button) =>
+              ButtonBuilder.from(button).setDisabled(true),
+            ),
+          );
+
+          await interaction.update({
+            embeds: [embed],
+            components: [disabledRow],
+          });
+
+          if (gameData.useEveryone) {
+            await interaction.channel.send({
+              content: "❌ 모집이 취소됐다!!",
+            });
+          }
+
+          cleanupGame(messageId);
+          return;
+        }
+
+        // 참가 처리
+        if (action === "join") {
+          if (interaction.member.id === gameData.hostId) {
+            await interaction.reply({
+              content: "니는 모집자잖아 쓰바라마!",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          if (gameData.participantIds.includes(interaction.member.id)) {
+            await interaction.reply({
+              content: "니는 이미 참가했는데 쓰바라마!",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          if (gameData.participants.length >= gameData.maxPlayers) {
+            await interaction.reply({
+              content: "꽉찼다!! 늦었다!! 쓰바라마!!!",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          gameData.participants.push(interaction.member.displayName);
+          gameData.participantIds.push(interaction.member.id);
+        }
+        // 퇴장 처리
+        else if (action === "leave") {
+          if (interaction.member.id === gameData.hostId) {
+            await interaction.reply({
+              content: "히히 못 가!",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          if (!gameData.participantIds.includes(interaction.member.id)) {
+            await interaction.reply({
+              content: "참가 하고 눌러라 쓰바라마!",
+              ephemeral: true,
+            });
+            return;
+          }
+
+          const index = gameData.participants.indexOf(
+            interaction.member.displayName,
+          );
+          if (index > -1) {
+            gameData.participants.splice(index, 1);
+            gameData.participantIds.splice(index, 1);
+          }
+        }
+
+        // 인원이 다 찼을 때의 처리
+        if (gameData.participants.length === gameData.maxPlayers) {
+          const embed = EmbedBuilder.from(interaction.message.embeds[0])
+            .setColor("#00ff00")
+            .setTitle("✅ 모집 완료다!!")
+            .spliceFields(2, 1, {
+              name: "현재 인원",
+              value: `${gameData.participants.length}명`,
+              inline: true,
+            })
+            .spliceFields(3, 1, {
+              name: "참가자 목록",
+              value: gameData.participants
+                .map((p, i) => `${i + 1}. ${p}`)
+                .join("\n"),
+            });
+
+          const disabledRow = new ActionRowBuilder().addComponents(
+            interaction.message.components[0].components.map((button) =>
+              ButtonBuilder.from(button).setDisabled(true),
+            ),
+          );
+
+          const mentions = gameData.participantIds
+            .map((id) => `<@${id}>`)
+            .join(", ");
+
+          // 버튼 비활성화 및 임베드 업데이트
+          await interaction.update({
+            embeds: [embed],
+            components: [disabledRow],
+          });
+
+          // 모집 완료 메시지 전송
+          await interaction.channel.send({
+            content: `${mentions}\n모집 완료다!! ${formatDate(gameData.scheduledTime)}까지 모여라!! 🎮`,
+            embeds: [embed],
+          });
+
+          // 게임 데이터는 유지! (cleanupGame 호출하지 않음)
+          return;
+        }
+
+        // 임베드 업데이트
+        const embed = EmbedBuilder.from(interaction.message.embeds[0])
+          .spliceFields(2, 1, {
+            name: "현재 인원",
+            value: `${gameData.participants.length}명`,
+            inline: true,
+          })
+          .spliceFields(3, 1, {
+            name: "참가자 목록",
+            value: gameData.participants
+              .map((p, i) => `${i + 1}. ${p}`)
+              .join("\n"),
+          });
+
+        await interaction.update({ embeds: [embed] });
+      }
+
+      // GGCK어 등록
+      if (interaction.commandName === "ggck어등록") {
+        // 관리자 권한 체크
+        if (!(await isAdmin(interaction.user.id, interaction.guildId))) {
+          await interaction.reply({
+            content: "GGCK어는 서버 주인만 등록할 수 있다 쓰바라마!",
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const word = interaction.options.getString("단어");
+        const meaning = interaction.options.getString("의미");
+        const example = interaction.options.getString("예문");
+        const creator = interaction.options.getString("창시자");
+        const category = interaction.options.getString("분류");
+
+        try {
+          // 기존 단어 검색
+          const wordDoc = await ggckWordsRef.doc(word).get();
+
+          if (wordDoc.exists) {
+            const confirmRow = new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`confirm_update_${word}`)
+                .setLabel("업데이트")
+                .setStyle(ButtonStyle.Primary),
+              new ButtonBuilder()
+                .setCustomId(`cancel_update_${word}`)
+                .setLabel("취소")
+                .setStyle(ButtonStyle.Secondary),
+            );
+
+            await interaction.reply({
+              content: "이미 존재하는 단어다! 업데이트 할까?",
+              components: [confirmRow],
+              ephemeral: true,
+            });
+            return;
+          }
+
+          // 새 단어 추가
+          await ggckWordsRef.doc(word).set({
+            word,
+            meaning,
+            example,
+            category,
+            creator: creator,
+            addedBy: interaction.user.tag,
+            addedAt: new Date(),
+            isActive: true,
+          });
+
+          const embed = new EmbedBuilder()
+            .setColor("#00ff00")
+            .setTitle("✅ GGCK어 등록 완료!")
+            .addFields(
+              { name: "단어", value: word },
+              { name: "의미", value: meaning },
+              { name: "예문", value: example },
+              { name: "창시자", value: creator },
+              { name: "분류", value: category },
+            );
+
+          await interaction.reply({ embeds: [embed] });
+        } catch (error) {
+          console.error("GGCK어 등록 중 에러 발생:", error);
+          await interaction.reply({
+            content: "등록 중 에러가 발생했다 쓰바라마!",
+            ephemeral: true,
+          });
+        }
+      }
+
+      // GGCK어 검색
+      if (interaction.commandName === "ggck어사전") {
+        const subcommand = interaction.options.getSubcommand();
+
+        if (subcommand === "검색") {
+          const searchWord = interaction.options.getString("단어");
+
+          try {
+            const wordDoc = await ggckWordsRef.doc(searchWord).get();
+
+            if (!wordDoc.exists || !wordDoc.data().isActive) {
+              await interaction.reply({
+                content: "그런 단어는 없다 쓰바라마!",
+                ephemeral: true,
+              });
+              return;
             }
-          },
-          duration * 60 * 1000,
-        );
 
-        gameTimers.set(messageId, timer);
+            const wordData = wordDoc.data();
+            const embed = new EmbedBuilder()
+              .setColor("#0099ff")
+              .setTitle(`📚 ${searchWord}`)
+              .addFields(
+                { name: "의미", value: wordData.meaning },
+                { name: "예문", value: wordData.example },
+                { name: "창시자", value: wordData.creator },
+                { name: "분류", value: wordData.category },
+              )
+              .setFooter({ text: "GGCK어 사전 Ver 1.0" });
+
+            await interaction.reply({ embeds: [embed] });
+          } catch (error) {
+            console.error("GGCK어 검색 중 에러 발생:", error);
+            await interaction.reply({
+              content: "검색 중 에러가 발생했다 쓰바라마!",
+              ephemeral: true,
+            });
+          }
+        } else if (subcommand === "목록") {
+          try {
+            const snapshot = await ggckWordsRef
+              .where("isActive", "==", true)
+              .get();
+            const categories = {};
+
+            snapshot.forEach((doc) => {
+              const wordData = doc.data();
+              if (!categories[wordData.category]) {
+                categories[wordData.category] = [];
+              }
+              categories[wordData.category].push(wordData.word);
+            });
+
+            const embed = new EmbedBuilder()
+              .setColor("#0099ff")
+              .setTitle("📚 GGCK어 사전 전체 목록")
+              .setDescription("카테고리별 GGCK어 목록입니다.");
+
+            Object.entries(categories).forEach(([category, wordList]) => {
+              embed.addFields({
+                name: `${category} (${wordList.length}개)`,
+                value: wordList.join(", "),
+              });
+            });
+
+            await interaction.reply({ embeds: [embed] });
+          } catch (error) {
+            console.error("GGCK어 목록 조회 중 에러 발생:", error);
+            await interaction.reply({
+              content: "목록 조회 중 에러가 발생했다 쓰바라마!",
+              ephemeral: true,
+            });
+          }
+        }
       }
     }
 
@@ -344,7 +817,25 @@ client.on("interactionCreate", async (interaction) => {
 
         const embed = EmbedBuilder.from(interaction.message.embeds[0])
           .setColor("#ff0000")
-          .setTitle("❌ 모집이 취소됐다!!");
+          .setTitle("❌ 모집이 취소됐다!!")
+          .setDescription("모집자가 예약을 취소했습니다.");
+
+        // 참가자들에게 DM으로 취소 알림
+        await Promise.all(
+          gameData.participantIds.map(async (participantId) => {
+            try {
+              const user = await client.users.fetch(participantId);
+              await user.send({
+                content: `❌ ${gameData.game} 예약이 취소되었습니다.`,
+              });
+            } catch (error) {
+              console.error(
+                `Failed to send cancellation DM to ${participantId}:`,
+                error,
+              );
+            }
+          }),
+        );
 
         const disabledRow = new ActionRowBuilder().addComponents(
           interaction.message.components[0].components.map((button) =>
@@ -449,30 +940,20 @@ client.on("interactionCreate", async (interaction) => {
         const mentions = gameData.participantIds
           .map((id) => `<@${id}>`)
           .join(", ");
+
+        const formatDate = (date) => {
+          return `${date.getMonth() + 1}월 ${date.getDate()}일 ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+        };
+
         await interaction.channel.send({
-          content: `${mentions}\n모집 완료다!! 게임하자!! 🎮`,
+          content: `${mentions}\n모집 완료다!! ${formatDate(gameData.scheduledTime)}까지 모여라!! 🎮`,
           embeds: [embed],
         });
-
-        // DM 전송을 Promise.all로 처리
-        await Promise.all(
-          gameData.participantIds.map(async (participantId) => {
-            try {
-              const user = await client.users.fetch(participantId);
-              await user.send({
-                content: `🎮 ${gameData.game} 모집 완료!!\n${gameData.participants.join(", ")}\n 스@근~하게 드러온나!`,
-              });
-            } catch (error) {
-              console.error(`Failed to send DM to ${participantId}:`, error);
-            }
-          }),
-        );
 
         await interaction.update({
           embeds: [embed],
           components: [disabledRow],
         });
-        cleanupGame(messageId);
         return;
       }
 
@@ -491,153 +972,6 @@ client.on("interactionCreate", async (interaction) => {
         });
 
       await interaction.update({ embeds: [embed] });
-    }
-
-    // 강찬어 등록
-    if (interaction.commandName === "강찬어등록") {
-      // 관리자 권한 체크
-      if (!(await isAdmin(interaction.user.id, interaction.guildId))) {
-        await interaction.reply({
-          content: "강찬어는 서버 주인만 등록할 수 있다 쓰바라마!",
-          ephemeral: true,
-        });
-        return;
-      }
-
-      const word = interaction.options.getString("단어");
-      const meaning = interaction.options.getString("의미");
-      const example = interaction.options.getString("예문");
-      const category = interaction.options.getString("분류");
-
-      try {
-        // 기존 단어 검색
-        const wordDoc = await gangchanWordsRef.doc(word).get();
-
-        if (wordDoc.exists) {
-          const confirmRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setCustomId(`confirm_update_${word}`)
-              .setLabel("업데이트")
-              .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-              .setCustomId(`cancel_update_${word}`)
-              .setLabel("취소")
-              .setStyle(ButtonStyle.Secondary),
-          );
-
-          await interaction.reply({
-            content: "이미 존재하는 단어다! 업데이트 할까?",
-            components: [confirmRow],
-            ephemeral: true,
-          });
-          return;
-        }
-
-        // 새 단어 추가
-        await gangchanWordsRef.doc(word).set({
-          word,
-          meaning,
-          example,
-          category,
-          addedBy: interaction.user.tag,
-          addedAt: new Date(),
-          isActive: true,
-        });
-
-        const embed = new EmbedBuilder()
-          .setColor("#00ff00")
-          .setTitle("✅ 강찬어 등록 완료!")
-          .addFields(
-            { name: "단어", value: word },
-            { name: "의미", value: meaning },
-            { name: "예문", value: example },
-            { name: "분류", value: category },
-          );
-
-        await interaction.reply({ embeds: [embed] });
-      } catch (error) {
-        console.error("강찬어 등록 중 에러 발생:", error);
-        await interaction.reply({
-          content: "등록 중 에러가 발생했다 쓰바라마!",
-          ephemeral: true,
-        });
-      }
-    }
-
-    // 강찬어 검색
-    // 강찬어 검색과 목록 부분의 코드 변경
-    if (interaction.commandName === "강찬어사전") {
-      const subcommand = interaction.options.getSubcommand();
-
-      if (subcommand === "검색") {
-        const searchWord = interaction.options.getString("단어");
-
-        try {
-          const wordDoc = await gangchanWordsRef.doc(searchWord).get();
-
-          if (!wordDoc.exists || !wordDoc.data().isActive) {
-            await interaction.reply({
-              content: "그런 단어는 없다 쓰바라마!",
-              ephemeral: true,
-            });
-            return;
-          }
-
-          const wordData = wordDoc.data();
-          const embed = new EmbedBuilder()
-            .setColor("#0099ff")
-            .setTitle(`📚 ${searchWord}`)
-            .addFields(
-              { name: "의미", value: wordData.meaning },
-              { name: "예문", value: wordData.example },
-              { name: "분류", value: wordData.category },
-            )
-            .setFooter({ text: "강찬어 사전 Ver 1.0" });
-
-          await interaction.reply({ embeds: [embed] });
-        } catch (error) {
-          console.error("강찬어 검색 중 에러 발생:", error);
-          await interaction.reply({
-            content: "검색 중 에러가 발생했다 쓰바라마!",
-            ephemeral: true,
-          });
-        }
-      } else if (subcommand === "목록") {
-        try {
-          const snapshot = await gangchanWordsRef
-            .where("isActive", "==", true)
-            .get();
-          const categories = {};
-
-          snapshot.forEach((doc) => {
-            const wordData = doc.data();
-            if (!categories[wordData.category]) {
-              categories[wordData.category] = [];
-            }
-            categories[wordData.category].push(wordData.word);
-          });
-
-          const embed = new EmbedBuilder()
-            .setColor("#0099ff")
-            .setTitle("📚 강찬어 사전 전체 목록")
-            .setDescription("카테고리별 강찬어 목록입니다.");
-
-          Object.entries(categories).forEach(([category, wordList]) => {
-            embed.addFields({
-              name: `${category} (${wordList.length}개)`,
-              value: wordList.join(", "),
-            });
-          });
-
-          await interaction.reply({ embeds: [embed] });
-        } catch (error) {
-          console.error("강찬어 목록 조회 중 에러 발생:", error);
-          await interaction.reply({
-            content: "목록 조회 중 에러가 발생했다 쓰바라마!",
-            ephemeral: true,
-          });
-        }
-      }
     }
   } catch (error) {
     console.error("Interaction 처리 중 에러 발생:", error);

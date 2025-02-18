@@ -390,17 +390,14 @@ async function getWeather(location) {
 
 // 운세 생성 함수
 function generateFortune(userId) {
-  // userId와 날짜로 시드값 생성 (하루동안 같은 결과)
   const today = new Date().toISOString().split("T")[0];
   let seed = parseInt(userId + today.replace(/-/g, ""));
 
-  // 시드값으로 랜덤값 생성
   const seedRandom = () => {
     let x = Math.sin(seed++) * 10000;
     return x - Math.floor(x);
   };
 
-  // 확률에 따른 운세 등급 선택
   const random = seedRandom() * 100;
   let accumulated = 0;
   let selectedGrade;
@@ -413,27 +410,33 @@ function generateFortune(userId) {
     }
   }
 
-  // 각 분야별 메시지 선택
   const getRandomMessage = (category, grade) => {
     const messages = fortuneData.categories[category][grade.grade];
     return messages[Math.floor(seedRandom() * messages.length)];
   };
+
+  // 조언 메시지 선택
+  const avoidThis =
+    fortuneData.advice.avoid[
+      Math.floor(seedRandom() * fortuneData.advice.avoid.length)
+    ];
+  const doThis =
+    fortuneData.advice.do[
+      Math.floor(seedRandom() * fortuneData.advice.do.length)
+    ];
 
   return {
     grade: selectedGrade,
     study: getRandomMessage("study", selectedGrade),
     work: getRandomMessage("work", selectedGrade),
     money: getRandomMessage("money", selectedGrade),
-    seedRandom: seedRandom,
+    avoidThis,
+    doThis,
   };
 }
 
 // 운세 표시용 임베드 생성
 function createFortuneEmbed(fortune, username) {
-  // 랜덤으로 조언 선택
-  const avoidThis = getRandomItem(fortuneData.advice.avoid, fortune.seedRandom);
-  const doThis = getRandomItem(fortuneData.advice.do, fortune.seedRandom);
-
   return new EmbedBuilder()
     .setColor(fortune.grade.color)
     .setTitle(
@@ -445,7 +448,7 @@ function createFortuneEmbed(fortune, username) {
       { name: "💰 금전/재물", value: fortune.money },
       {
         name: "🎯 오늘의 조언",
-        value: `『${avoidThis}』를 멀리하고 『${doThis}』를 가까이하세요.`,
+        value: `『${fortune.avoidThis}』를 멀리하고 『${fortune.doThis}』를 가까이하세요.`,
       },
     )
     .setFooter({ text: "매일 00시에 운세가 갱신됩니다!" })

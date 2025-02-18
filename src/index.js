@@ -1,5 +1,6 @@
 const { db, ggckWordsRef } = require("./db/firebase");
 const { isAdmin, setAdmin } = require("./db/firebase");
+const axios = require("axios");
 
 const {
   Client,
@@ -14,6 +15,28 @@ const {
   PermissionsBitField,
 } = require("discord.js");
 const dotenv = require("dotenv");
+
+// 날씨 아이콘 매핑
+const weatherIcons = {
+  "01d": "☀️", // 맑음 (낮)
+  "01n": "🌙", // 맑음 (밤)
+  "02d": "⛅", // 약간 흐림 (낮)
+  "02n": "☁️", // 약간 흐림 (밤)
+  "03d": "☁️", // 흐림
+  "03n": "☁️",
+  "04d": "☁️", // 매우 흐림
+  "04n": "☁️",
+  "09d": "🌧️", // 소나기
+  "09n": "🌧️",
+  "10d": "🌦️", // 비 (낮)
+  "10n": "🌧️", // 비 (밤)
+  "11d": "⛈️", // 천둥번개
+  "11n": "⛈️",
+  "13d": "🌨️", // 눈
+  "13n": "🌨️",
+  "50d": "🌫️", // 안개
+  "50n": "🌫️",
+};
 
 dotenv.config();
 
@@ -118,6 +141,16 @@ const commands = [
         .setDescription("의미 만든 사람")
         .setRequired(true),
     ),
+  // 날씨 커맨드
+  new SlashCommandBuilder()
+    .setName("날씨")
+    .setDescription("지역의 현재 날씨를 확인합니다")
+    .addStringOption((option) =>
+      option
+        .setName("지역")
+        .setDescription("날씨를 확인할 지역을 입력하세요")
+        .setRequired(true),
+    ),
 ];
 
 // 게임 데이터와 타이머를 함께 관리
@@ -143,6 +176,86 @@ function setLongTimeout(callback, delay) {
     }, MAX_TIMEOUT);
   } else {
     return setTimeout(callback, delay);
+  }
+}
+
+// 풍향 변환 함수
+function getWindDirection(degrees) {
+  const directions = ["북", "북동", "동", "남동", "남", "남서", "서", "북서"];
+  const index = Math.round(degrees / 45) % 8;
+  return directions[index];
+}
+
+// 날씨 정보 조회 함수
+async function getWeather(location) {
+  try {
+    // 지역 -> 좌표 변환
+    const geocodingUrl = `http://api.openweathermap.org/geo/1.0/direct?q=${encodeURIComponent(location)}&limit=1&appid=${process.env.OPENWEATHER_API_KEY}`;
+    const geoResponse = await axios.get(geocodingUrl);
+
+    if (!geoResponse.data.length) {
+      throw new Error("지역을 찾을 수 없습니다.");
+    }
+
+    const { lat, lon } = geoResponse.data[0];
+
+    // 날씨 정보 조회
+    const weatherUrl = `https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${process.env.OPENWEATHER_API_KEY}&units=metric&lang=kr`;
+    const weatherResponse = await axios.get(weatherUrl);
+    const data = weatherResponse.data;
+
+    // 대기질 정보 조회
+    const airUrl = `http://api.openweathermap.org/data/2.5/air_pollution?lat=${lat}&lon=${lon}&appid=${process.env.OPENWEATHER_API_KEY}`;
+    const airResponse = await axios.get(airUrl);
+    const airData = airResponse.data;
+
+    // 대기질 지수 해석
+    const aqiLabels = ["없음", "좋음", "보통", "나쁨", "매우 나쁨", "위험"];
+    const aqi = aqiLabels[airData.list[0].main.aqi];
+
+    return new EmbedBuilder()
+      .setColor("#0099ff")
+      .setTitle(
+        `${location}의 현재 날씨 ${weatherIcons[data.weather[0].icon] || "🌈"}`,
+      )
+      .setDescription(data.weather[0].description)
+      .addFields(
+        {
+          name: "기온",
+          value: `${Math.round(data.main.temp)}°C (체감 ${Math.round(data.main.feels_like)}°C)`,
+          inline: true,
+        },
+        {
+          name: "습도",
+          value: `${data.main.humidity}%`,
+          inline: true,
+        },
+        {
+          name: "기압",
+          value: `${data.main.pressure}hPa`,
+          inline: true,
+        },
+        {
+          name: "풍속/풍향",
+          value: `${data.wind.speed}m/s / ${getWindDirection(data.wind.deg)}`,
+          inline: true,
+        },
+        {
+          name: "최고/최저 기온",
+          value: `${Math.round(data.main.temp_max)}°C / ${Math.round(data.main.temp_min)}°C`,
+          inline: true,
+        },
+        {
+          name: "대기질",
+          value: aqi,
+          inline: true,
+        },
+      )
+      .setFooter({ text: "데이터 제공: OpenWeather" })
+      .setTimestamp();
+  } catch (error) {
+    console.error("날씨 정보 조회 중 에러:", error);
+    throw error;
   }
 }
 
@@ -353,6 +466,28 @@ client.on("interactionCreate", async (interaction) => {
 
     // 슬래시 커맨드 처리
     if (interaction.isCommand()) {
+      // 날씨 커맨드 핸들러
+      if (interaction.commandName === "날씨") {
+        try {
+          await interaction.deferReply(); // 응답 지연 표시
+
+          const location = interaction.options.getString("지역");
+          const weatherEmbed = await getWeather(location);
+
+          await interaction.editReply({ embeds: [weatherEmbed] });
+        } catch (error) {
+          let errorMessage = "날씨 정보를 가져오는 중 오류가 발생했습니다.";
+          if (error.message === "지역을 찾을 수 없습니다.") {
+            errorMessage =
+              "입력하신 지역을 찾을 수 없습니다. 지역명을 다시 확인해주세요.";
+          }
+
+          await interaction.editReply({
+            content: errorMessage,
+            ephemeral: true,
+          });
+        }
+      }
       if (interaction.commandName === "게임모집") {
         const game = interaction.options.getString("게임");
         const players = interaction.options.getInteger("인원");

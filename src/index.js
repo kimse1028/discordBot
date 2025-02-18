@@ -38,6 +38,131 @@ const weatherIcons = {
   "50n": "🌫️",
 };
 
+// getRandomItem 유틸리티 함수 추가
+function getRandomItem(array) {
+  return array[Math.floor(Math.random() * array.length)];
+}
+
+// 운세 데이터
+const fortuneData = {
+  // 운세 등급과 확률 (총합 100)
+  grades: [
+    { grade: "대길", probability: 5, color: "#FF0000", emoji: "🔱" },
+    { grade: "중길", probability: 25, color: "#FFA500", emoji: "🌟" },
+    { grade: "소길", probability: 35, color: "#FFFF00", emoji: "⭐" },
+    { grade: "흉", probability: 25, color: "#A9A9A9", emoji: "⚠️" },
+    { grade: "대흉", probability: 10, color: "#4A4A4A", emoji: "💀" },
+  ],
+  advice: {
+    // 피해야 할 것들
+    avoid: [
+      "과식",
+      "충동구매",
+      "늦잠",
+      "음주",
+      "불필요한 다툼",
+      "우산 없이 외출",
+      "즉흥적인 결정",
+      "뒷담화",
+      "무리한 운동",
+      "게임",
+      "SNS",
+      "야식",
+      "긴 회의",
+      "도박",
+      "험한 말",
+    ],
+    // 해야 할 것들
+    do: [
+      "운동",
+      "독서",
+      "명상",
+      "산책",
+      "친구와의 대화",
+      "가족과의 시간",
+      "새로운 도전",
+      "청소",
+      "일찍 기상",
+      "물 많이 마시기",
+      "스트레칭",
+      "일기쓰기",
+      "봉사활동",
+      "저축",
+      "칭찬하기",
+    ],
+  },
+  // 각 분야별 메시지
+  categories: {
+    // 행동 지침 데이터 추가
+    study: {
+      대길: [
+        "공부한 모든 것이 완벽하게 이해될 것입니다",
+        "놀라운 집중력으로 큰 성과를 이룰 수 있습니다",
+      ],
+      중길: [
+        "꾸준한 노력이 결실을 맺을 것입니다",
+        "새로운 지식을 얻을 좋은 기회가 있습니다",
+      ],
+      소길: [
+        "평소처럼 진행하면 무난한 결과가 있을 것입니다",
+        "복습이 도움이 될 것입니다",
+      ],
+      흉: [
+        "집중력이 떨어질 수 있으니 주의하세요",
+        "기초부터 다시 점검해보는 것이 좋습니다",
+      ],
+      대흉: [
+        "실수하기 쉬운 날입니다. 모든 것을 꼼꼼히 확인하세요",
+        "무리한 계획은 피하는 것이 좋습니다",
+      ],
+    },
+    work: {
+      대길: [
+        "큰 성과를 이룰 수 있는 날입니다",
+        "승진이나 좋은 기회가 찾아올 수 있습니다",
+      ],
+      중길: [
+        "동료들과의 협력이 좋은 결과를 가져올 것입니다",
+        "새로운 프로젝트에서 좋은 성과가 있을 것입니다",
+      ],
+      소길: [
+        "무난한 하루가 될 것입니다",
+        "평소대로 진행하면 좋은 결과가 있을 것입니다",
+      ],
+      흉: [
+        "의사소통에 오해가 생길 수 있으니 주의하세요",
+        "중요한 결정은 미루는 것이 좋습니다",
+      ],
+      대흉: [
+        "중요한 실수가 있을 수 있으니 모든 것을 재확인하세요",
+        "새로운 시도는 피하는 것이 좋습니다",
+      ],
+    },
+    money: {
+      대길: [
+        "예상치 못한 수입이 생길 수 있습니다",
+        "투자한 것에서 큰 수익이 있을 것입니다",
+      ],
+      중길: [
+        "재물운이 좋으니 적극적으로 움직여보세요",
+        "새로운 재테크를 시작하기 좋은 날입니다",
+      ],
+      소길: [
+        "금전적으로 무난한 하루가 될 것입니다",
+        "계획했던 지출이 예상대로 진행될 것입니다",
+      ],
+      흉: [
+        "예상치 못한 지출이 있을 수 있습니다",
+        "금전 거래는 신중하게 결정하세요",
+      ],
+      대흉: [
+        "큰 금전적 손실이 있을 수 있으니 모든 거래를 조심하세요",
+        "투자나 재테크는 절대 피하세요",
+      ],
+    },
+  },
+};
+
 dotenv.config();
 
 const client = new Client({
@@ -151,6 +276,10 @@ const commands = [
         .setDescription("날씨를 확인할 지역을 입력하세요")
         .setRequired(true),
     ),
+  // 운세 커맨드 추가
+  new SlashCommandBuilder()
+    .setName("운세")
+    .setDescription("오늘의 운세를 확인합니다"),
 ];
 
 // 게임 데이터와 타이머를 함께 관리
@@ -257,6 +386,73 @@ async function getWeather(location) {
     console.error("날씨 정보 조회 중 에러:", error);
     throw error;
   }
+}
+
+// 운세 생성 함수
+function generateFortune(userId) {
+  const today = new Date().toISOString().split("T")[0];
+  let seed = parseInt(userId + today.replace(/-/g, ""));
+
+  const seedRandom = () => {
+    let x = Math.sin(seed++) * 10000;
+    return x - Math.floor(x);
+  };
+
+  const random = seedRandom() * 100;
+  let accumulated = 0;
+  let selectedGrade;
+
+  for (const grade of fortuneData.grades) {
+    accumulated += grade.probability;
+    if (random <= accumulated) {
+      selectedGrade = grade;
+      break;
+    }
+  }
+
+  const getRandomMessage = (category, grade) => {
+    const messages = fortuneData.categories[category][grade.grade];
+    return messages[Math.floor(seedRandom() * messages.length)];
+  };
+
+  // 조언 메시지 선택
+  const avoidThis =
+    fortuneData.advice.avoid[
+      Math.floor(seedRandom() * fortuneData.advice.avoid.length)
+    ];
+  const doThis =
+    fortuneData.advice.do[
+      Math.floor(seedRandom() * fortuneData.advice.do.length)
+    ];
+
+  return {
+    grade: selectedGrade,
+    study: getRandomMessage("study", selectedGrade),
+    work: getRandomMessage("work", selectedGrade),
+    money: getRandomMessage("money", selectedGrade),
+    avoidThis,
+    doThis,
+  };
+}
+
+// 운세 표시용 임베드 생성
+function createFortuneEmbed(fortune, username) {
+  return new EmbedBuilder()
+    .setColor(fortune.grade.color)
+    .setTitle(
+      `${fortune.grade.emoji} ${username}님의 오늘의 운세: ${fortune.grade.grade}`,
+    )
+    .addFields(
+      { name: "📚 학업/공부", value: fortune.study },
+      { name: "💼 직장/일", value: fortune.work },
+      { name: "💰 금전/재물", value: fortune.money },
+      {
+        name: "🎯 오늘의 조언",
+        value: `『${fortune.avoidThis}』를 멀리하고 『${fortune.doThis}』를 가까이하세요.`,
+      },
+    )
+    .setFooter({ text: "매일 00시에 운세가 갱신됩니다!" })
+    .setTimestamp();
 }
 
 // 게임 알림 처리를 위한 개선된 함수
@@ -466,6 +662,38 @@ client.on("interactionCreate", async (interaction) => {
 
     // 슬래시 커맨드 처리
     if (interaction.isCommand()) {
+      if (interaction.commandName === "운세") {
+        const fortune = generateFortune(interaction.user.id);
+        const embed = createFortuneEmbed(
+          fortune,
+          interaction.member.displayName,
+        );
+
+        let content = null;
+
+        if (fortune.grade.grade === "대흉") {
+          content = "오늘은 하루종일 집에서 쉬는건 어떨까요...";
+        } else if (fortune.grade.grade === "대길") {
+          // 대길일 경우 전체 알림 메시지
+          content = `@everyone\n🎊 ${interaction.member.displayName}님께서 대길을 받으셨습니다!! 모두 축하해주세요!! 🎉`;
+
+          // 추가 축하 메시지 채널에 보내기
+          try {
+            await interaction.channel.send({
+              content: `축하합니다! ${interaction.member.displayName}님의 오늘 운세는 ${fortune.grade.emoji} 대길 입니다!!\n행운이 가득한 하루 되세요! 🍀`,
+              allowedMentions: { parse: [] }, // 이 메시지에서는 멘션 비활성화
+            });
+          } catch (error) {
+            console.error("축하 메시지 전송 실패:", error);
+          }
+        }
+
+        await interaction.reply({
+          content,
+          embeds: [embed],
+          allowedMentions: { parse: ["everyone"] }, // @everyone 멘션 활성화
+        });
+      }
       // 날씨 커맨드 핸들러
       if (interaction.commandName === "날씨") {
         try {

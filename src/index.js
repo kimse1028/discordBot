@@ -22,33 +22,39 @@ const KR_TIME_DIFF = 9 * 60 * 60 * 1000; // 한국 시간대 (UTC+9)
 
 // 현재 한국 시간 Date 객체 가져오기
 function getCurrentKoreanDate() {
-  return new Date(); // 시스템 시간을 그대로 사용
+  const now = new Date();
+  return new Date(now.getTime() + KR_TIME_DIFF);
 }
 
 // Date 객체를 Firebase Timestamp로 변환 (UTC 기준)
 function getKoreanTimestamp(date) {
-  return Timestamp.fromDate(date); // 직접 변환
+  // 한국 시간을 UTC로 변환
+  const utcTime = new Date(date.getTime() - KR_TIME_DIFF);
+  return Timestamp.fromDate(utcTime);
 }
 
 // Firebase Timestamp를 한국 시간 Date 객체로 변환
 function koreanDateFromTimestamp(timestamp) {
-  return timestamp.toDate(); // 직접 변환
+  const utcDate = timestamp.toDate();
+  return new Date(utcDate.getTime() + KR_TIME_DIFF);
 }
 
 // 게임 예약 시간 설정 함수
 function createScheduledTime(hour, minute) {
-  const now = getCurrentKoreanDate();
+  const koreanNow = getCurrentKoreanDate();
+
+  // 한국 시간 기준으로 예약 시간 설정
   const scheduledDate = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
+    koreanNow.getFullYear(),
+    koreanNow.getMonth(),
+    koreanNow.getDate(),
     hour,
     minute,
     0,
   );
 
-  // 현재 시간보다 이전인 경우 다음 날로 설정
-  if (scheduledDate.getTime() <= now.getTime()) {
+  // 현재 한국 시간보다 이전인 경우 다음 날로 설정
+  if (scheduledDate.getTime() <= koreanNow.getTime()) {
     scheduledDate.setDate(scheduledDate.getDate() + 1);
   }
 
@@ -57,19 +63,58 @@ function createScheduledTime(hour, minute) {
 
 // 시간 유효성 검사 함수
 function isValidTime(scheduledDate) {
-  const now = getCurrentKoreanDate();
-  const minTime = new Date(now.getTime() + 10 * 60 * 1000); // 현재 시간 + 10분
+  const koreanNow = getCurrentKoreanDate();
+  const minTime = new Date(koreanNow.getTime() + 10 * 60 * 1000); // 현재 시간 + 10분
   return scheduledDate.getTime() > minTime.getTime();
 }
 
 // 전역 시간 포맷팅 함수
 const formatTime = (date) => {
+  // 한국 시간으로 포맷팅
   return new Intl.DateTimeFormat("ko-KR", {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
+    timeZone: "Asia/Seoul",
   }).format(date);
 };
+
+// 디버그용 시간 로깅 함수
+function logTimeInfo(scheduledDate) {
+  const koreanNow = getCurrentKoreanDate();
+  console.log(
+    "현재 한국 시간:",
+    new Intl.DateTimeFormat("ko-KR", {
+      timeZone: "Asia/Seoul",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(koreanNow),
+  );
+
+  console.log(
+    "예약된 시간:",
+    new Intl.DateTimeFormat("ko-KR", {
+      timeZone: "Asia/Seoul",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(scheduledDate),
+  );
+
+  console.log(
+    "시간 차이(분):",
+    Math.round((scheduledDate.getTime() - koreanNow.getTime()) / (1000 * 60)),
+  );
+}
 
 // 날씨 아이콘 매핑
 const weatherIcons = {
@@ -873,41 +918,8 @@ ${interaction.member.displayName}님께서 0.2%의 확률을 뚫고
         // createScheduledTime 함수를 사용하여 예약 시간 설정
         const scheduledDate = createScheduledTime(hour, minute);
 
-        // 디버깅을 위한 로그 추가
-        console.log(
-          "현재 한국 시간:",
-          new Intl.DateTimeFormat("ko-KR", {
-            year: "numeric",
-            month: "2-digit",
-            day: "2-digit",
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-            hour12: false,
-          }).format(getCurrentKoreanDate()),
-        );
-
-        console.log(
-          "예약된 시간:",
-          new Intl.DateTimeFormat("ko-KR", {
-            timeZone: "Asia/Seoul",
-            year: "numeric",
-            month: "2-digit",
-            day: "2-digit",
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-            hour12: false,
-          }).format(scheduledDate),
-        );
-
-        console.log(
-          "시간 차이(분):",
-          Math.round(
-            (scheduledDate.getTime() - getCurrentKoreanDate().getTime()) /
-              (1000 * 60),
-          ),
-        );
+        // 디버깅을 위한 시간 정보 로깅
+        logTimeInfo(scheduledDate);
 
         const messageId = createGame(client, interaction, {
           host: interaction.member.displayName,
@@ -933,7 +945,7 @@ ${interaction.member.displayName}님께서 0.2%의 확률을 뚫고
             { name: "현재 인원", value: "1명", inline: true },
             {
               name: "예약 시간",
-              value: formatTime(scheduledDate), // formatTime 함수는 이미 한국 시간으로 변환
+              value: formatTime(scheduledDate),
               inline: true,
             },
             { name: "설명", value: description },

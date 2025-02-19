@@ -443,16 +443,16 @@ function generateFortune(userId) {
   const now = new Date();
   const today = now.toISOString().slice(0, 10).replace(/-/g, "");
 
-  // 현재 시간을 그대로 표시
-  console.log("현재 시간:", now.toLocaleString("ko-KR"));
-  console.log("운세 날짜:", today);
+  // 시드 생성 방식 변경
+  let seed = parseInt(userId.toString() + today, 10) % Number.MAX_SAFE_INTEGER;
 
-  let seed = parseInt(userId + today);
-
-  // 나머지 코드는 그대로 유지
+  // 시드 랜덤 함수 수정
   const seedRandom = () => {
-    let x = Math.sin(seed++) * 10000;
-    return x - Math.floor(x);
+    // Mulberry32 알고리즘 사용
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = Math.imul(t + (t >>> 7), 61 | t) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 
   const random = seedRandom() * 100;

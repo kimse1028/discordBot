@@ -22,9 +22,7 @@ const KR_TIME_DIFF = 9 * 60 * 60 * 1000; // 한국 시간대 (UTC+9)
 
 // 현재 한국 시간 Date 객체 가져오기
 function getCurrentKoreanDate() {
-  const now = new Date();
-  // 시스템이 이미 한국 시간대로 설정되어 있으므로 추가 변환 불필요
-  return now;
+  return new Date(); // 서버 시간을 그대로 사용
 }
 
 // Date 객체를 Firebase Timestamp로 변환 (UTC 기준)
@@ -77,32 +75,18 @@ const formatTime = (date) => {
 
 // 디버그용 시간 로깅 함수
 function logTimeInfo(scheduledDate) {
-  const now = getCurrentKoreanDate();
+  const now = new Date(); // 서버 시간 직접 사용
 
+  // 서버 시간을 그대로 출력
   console.log(
     "현재 한국 시간:",
-    new Intl.DateTimeFormat("ko-KR", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    }).format(now),
+    `${now.getFullYear()}. ${String(now.getMonth() + 1).padStart(2, "0")}. ${String(now.getDate()).padStart(2, "0")}. ${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}:${String(now.getSeconds()).padStart(2, "0")}`,
   );
 
+  // 예약 시간 출력
   console.log(
     "예약된 시간:",
-    new Intl.DateTimeFormat("ko-KR", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: false,
-    }).format(scheduledDate),
+    `${scheduledDate.getFullYear()}. ${String(scheduledDate.getMonth() + 1).padStart(2, "0")}. ${String(scheduledDate.getDate()).padStart(2, "0")}. ${String(scheduledDate.getHours()).padStart(2, "0")}:${String(scheduledDate.getMinutes()).padStart(2, "0")}:${String(scheduledDate.getSeconds()).padStart(2, "0")}`,
   );
 
   console.log(

@@ -1,5 +1,6 @@
 const { db, ggckWordsRef } = require("./db/firebase");
 const { isAdmin, setAdmin } = require("./db/firebase");
+const { Timestamp } = require("firebase-admin/firestore");
 const axios = require("axios");
 
 const {
@@ -15,6 +16,60 @@ const {
   PermissionsBitField,
 } = require("discord.js");
 const dotenv = require("dotenv");
+
+// 한국 시간 관련 상수 및 유틸리티 함수들
+const KR_TIME_DIFF = 9 * 60 * 60 * 1000; // 한국 시간대 (UTC+9)
+
+// 현재 한국 시간 Date 객체 가져오기
+function getCurrentKoreanDate() {
+  return new Date(); // 시스템 시간을 그대로 사용
+}
+
+// Date 객체를 Firebase Timestamp로 변환 (UTC 기준)
+function getKoreanTimestamp(date) {
+  return Timestamp.fromDate(date); // 직접 변환
+}
+
+// Firebase Timestamp를 한국 시간 Date 객체로 변환
+function koreanDateFromTimestamp(timestamp) {
+  return timestamp.toDate(); // 직접 변환
+}
+
+// 게임 예약 시간 설정 함수
+function createScheduledTime(hour, minute) {
+  const now = getCurrentKoreanDate();
+  const scheduledDate = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    hour,
+    minute,
+    0,
+  );
+
+  // 현재 시간보다 이전인 경우 다음 날로 설정
+  if (scheduledDate.getTime() <= now.getTime()) {
+    scheduledDate.setDate(scheduledDate.getDate() + 1);
+  }
+
+  return scheduledDate;
+}
+
+// 시간 유효성 검사 함수
+function isValidTime(scheduledDate) {
+  const now = getCurrentKoreanDate();
+  const minTime = new Date(now.getTime() + 10 * 60 * 1000); // 현재 시간 + 10분
+  return scheduledDate.getTime() > minTime.getTime();
+}
+
+// 전역 시간 포맷팅 함수
+const formatTime = (date) => {
+  return new Intl.DateTimeFormat("ko-KR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+};
 
 // 날씨 아이콘 매핑
 const weatherIcons = {
@@ -47,7 +102,8 @@ function getRandomItem(array) {
 const fortuneData = {
   // 운세 등급과 확률 (총합 100)
   grades: [
-    { grade: "대길", probability: 5, color: "#FF0000", emoji: "🔱" },
+    { grade: "태초", probability: 0.2, color: "#FFFFFF", emoji: "✨" },
+    { grade: "대길", probability: 4.8, color: "#FF0000", emoji: "🔱" },
     { grade: "중길", probability: 25, color: "#FFA500", emoji: "🌟" },
     { grade: "소길", probability: 35, color: "#FFFF00", emoji: "⭐" },
     { grade: "흉", probability: 25, color: "#A9A9A9", emoji: "⚠️" },
@@ -93,8 +149,11 @@ const fortuneData = {
   },
   // 각 분야별 메시지
   categories: {
-    // 행동 지침 데이터 추가
     study: {
+      태초: [
+        "우주의 지식이 당신에게 흘러들어옵니다",
+        "초월적인 깨달음으로 모든 것이 명확해질 것입니다",
+      ],
       대길: [
         "공부한 모든 것이 완벽하게 이해될 것입니다",
         "놀라운 집중력으로 큰 성과를 이룰 수 있습니다",
@@ -117,6 +176,10 @@ const fortuneData = {
       ],
     },
     work: {
+      태초: [
+        "당신의 업적이 역사에 기록될 것입니다",
+        "세상을 변화시킬 혁신을 이룰 것입니다",
+      ],
       대길: [
         "큰 성과를 이룰 수 있는 날입니다",
         "승진이나 좋은 기회가 찾아올 수 있습니다",
@@ -139,6 +202,10 @@ const fortuneData = {
       ],
     },
     money: {
+      태초: [
+        "돈의 개념을 초월한 부를 얻게 될 것입니다",
+        "황금비가 내리는 날입니다",
+      ],
       대길: [
         "예상치 못한 수입이 생길 수 있습니다",
         "투자한 것에서 큰 수익이 있을 것입니다",
@@ -175,11 +242,6 @@ const client = new Client({
     GatewayIntentBits.GuildPresences,
   ],
 });
-
-// 전역 시간 포맷팅 함수
-const formatTime = (date) => {
-  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-};
 
 // 슬래시 커맨드 정의
 const commands = [
@@ -390,12 +452,19 @@ async function getWeather(location) {
 
 // 운세 생성 함수
 function generateFortune(userId) {
-  const today = new Date().toISOString().split("T")[0];
-  let seed = parseInt(userId + today.replace(/-/g, ""));
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10).replace(/-/g, "");
 
+  // 시드 생성 방식 변경
+  let seed = parseInt(userId.toString() + today, 10) % Number.MAX_SAFE_INTEGER;
+
+  // 시드 랜덤 함수 수정
   const seedRandom = () => {
-    let x = Math.sin(seed++) * 10000;
-    return x - Math.floor(x);
+    // Mulberry32 알고리즘 사용
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = Math.imul(t + (t >>> 7), 61 | t) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 
   const random = seedRandom() * 100;
@@ -587,20 +656,30 @@ function setGameTimer(client, messageId, gameData, scheduledTime) {
   gameTimers.set(messageId, timer);
 }
 
-// 게임 생성 시 호출되는 함수
+// 게임 생성 함수 수정
 function createGame(client, interaction, gameData) {
   const messageId = Date.now().toString();
 
-  // 채널 ID 저장 추가
-  const enhancedGameData = {
+  // Firebase에 저장할 데이터 준비
+  const gameDoc = {
     ...gameData,
     channel: interaction.channelId,
-    endTime: gameData.scheduledTime.getTime(),
+    scheduledTimestamp: getKoreanTimestamp(gameData.scheduledTime), // Timestamp로 변환
+    createdAt: Timestamp.now(),
   };
 
-  gameParticipants.set(messageId, enhancedGameData);
-  setGameTimer(client, messageId, enhancedGameData, gameData.scheduledTime);
+  // Firestore에 게임 데이터 저장
+  db.collection("games")
+    .doc(messageId)
+    .set(gameDoc)
+    .catch((error) => console.error("Error saving game data:", error));
 
+  gameParticipants.set(messageId, {
+    ...gameDoc,
+    endTime: gameData.scheduledTime.getTime(),
+  });
+
+  setGameTimer(client, messageId, gameDoc, gameData.scheduledTime);
   return messageId;
 }
 
@@ -670,29 +749,96 @@ client.on("interactionCreate", async (interaction) => {
         );
 
         let content = null;
+        let specialEffects = [];
 
-        if (fortune.grade.grade === "대흉") {
+        if (fortune.grade.grade === "태초") {
+          // 태초 등급 전용 특수 효과
+          content = `@everyone\n
+🌟 경 이 로 운 · 순 간 🌟
+⠀
+✨✨✨  태 초 등 급  ✨✨✨
+⠀
+${interaction.member.displayName}님께서 0.2%의 확률을 뚫고
+태초 등급을 획득하셨습니다!
+⠀
+축하의 의미로 태초의 빛이 내립니다...`;
+
+          // 특수 효과 메시지들
+          specialEffects = [
+            "```diff\n+ 우주가 진동하기 시작합니다...```",
+            "```fix\n☆ 태초의 기운이 흐릅니다... ☆```",
+            "```yaml\n시공간이 뒤틀리기 시작합니다...```",
+            "```css\n[ 태초의 문이 열립니다... ]```",
+            `${interaction.member.displayName}님의 운명이 재정의됩니다...`,
+          ];
+
+          // 임베드 색상을 무지개 효과로
+          embed.setColor(
+            "#" + Math.floor(Math.random() * 16777215).toString(16),
+          );
+        } else if (fortune.grade.grade === "대흉") {
           content = "오늘은 하루종일 집에서 쉬는건 어떨까요...";
         } else if (fortune.grade.grade === "대길") {
-          // 대길일 경우 전체 알림 메시지
           content = `@everyone\n🎊 ${interaction.member.displayName}님께서 대길을 받으셨습니다!! 모두 축하해주세요!! 🎉`;
 
           // 추가 축하 메시지 채널에 보내기
           try {
             await interaction.channel.send({
               content: `축하합니다! ${interaction.member.displayName}님의 오늘 운세는 ${fortune.grade.emoji} 대길 입니다!!\n행운이 가득한 하루 되세요! 🍀`,
-              allowedMentions: { parse: [] }, // 이 메시지에서는 멘션 비활성화
+              allowedMentions: { parse: [] },
             });
           } catch (error) {
             console.error("축하 메시지 전송 실패:", error);
           }
         }
 
+        // 먼저 운세 결과 전송
         await interaction.reply({
           content,
           embeds: [embed],
-          allowedMentions: { parse: ["everyone"] }, // @everyone 멘션 활성화
+          allowedMentions: { parse: ["everyone"] },
         });
+
+        // 태초 등급일 경우 특수 효과 순차 전송
+        if (fortune.grade.grade === "태초") {
+          for (const effect of specialEffects) {
+            await new Promise((resolve) => setTimeout(resolve, 1500)); // 1.5초 간격
+            await interaction.channel.send(effect);
+          }
+
+          // 마지막 대형 효과
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          // 태초 메시지를 여러 가지 코드 블록 스타일로 표현
+          await interaction.channel.send(`\`\`\`fix
+⭐️ ⋆ ˚｡⋆୨୧˚ 태 초 의 축 복 ˚୨୧⋆｡˚ ⋆ ⭐️
+\`\`\``);
+
+          await new Promise((resolve) => setTimeout(resolve, 800));
+
+          await interaction.channel.send(`\`\`\`diff
++ ₊⊹⭒══════════════════════════⭒⊹₊
++    신들의 축복이 내립니다...
++ ₊⊹⭒══════════════════════════⭒⊹₊
+\`\`\``);
+
+          await new Promise((resolve) => setTimeout(resolve, 800));
+
+          await interaction.channel.send(`\`\`\`yaml
+이 상서로운 기운은 천년에 한번 올까말까한 기회입니다!
+\`\`\``);
+
+          await new Promise((resolve) => setTimeout(resolve, 800));
+
+          await interaction.channel.send(`\`\`\`css
+[당신의 오늘은 전설이 될 것입니다...]
+\`\`\``);
+
+          await new Promise((resolve) => setTimeout(resolve, 800));
+
+          await interaction.channel.send(`\`\`\`css
+[행복한 하루 되세요!]
+\`\`\``);
+        }
       }
       // 날씨 커맨드 핸들러
       if (interaction.commandName === "날씨") {
@@ -724,26 +870,44 @@ client.on("interactionCreate", async (interaction) => {
         const minute = interaction.options.getInteger("분");
         const useEveryone = interaction.options.getBoolean("전체알림") ?? false;
 
-        const now = new Date();
-        const scheduledDate = new Date();
-        scheduledDate.setHours(hour, minute, 0, 0);
+        // createScheduledTime 함수를 사용하여 예약 시간 설정
+        const scheduledDate = createScheduledTime(hour, minute);
 
-        // 시간 유효성 검사 함수
-        function isValidTime(date) {
-          const minTime = new Date();
-          minTime.setMinutes(minTime.getMinutes()); // 최소 10분 이후
+        // 디버깅을 위한 로그 추가
+        console.log(
+          "현재 한국 시간:",
+          new Intl.DateTimeFormat("ko-KR", {
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false,
+          }).format(getCurrentKoreanDate()),
+        );
 
-          return date > minTime;
-        }
+        console.log(
+          "예약된 시간:",
+          new Intl.DateTimeFormat("ko-KR", {
+            timeZone: "Asia/Seoul",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false,
+          }).format(scheduledDate),
+        );
 
-        // 시간 유효성 검사
-        if (!isValidTime(scheduledDate)) {
-          await interaction.reply({
-            content: "현재 시간보다 최소 10분 이후로만 예약할 수 있습니다!",
-            ephemeral: true,
-          });
-          return;
-        }
+        console.log(
+          "시간 차이(분):",
+          Math.round(
+            (scheduledDate.getTime() - getCurrentKoreanDate().getTime()) /
+              (1000 * 60),
+          ),
+        );
 
         const messageId = createGame(client, interaction, {
           host: interaction.member.displayName,
@@ -769,7 +933,7 @@ client.on("interactionCreate", async (interaction) => {
             { name: "현재 인원", value: "1명", inline: true },
             {
               name: "예약 시간",
-              value: formatTime(scheduledDate),
+              value: formatTime(scheduledDate), // formatTime 함수는 이미 한국 시간으로 변환
               inline: true,
             },
             { name: "설명", value: description },

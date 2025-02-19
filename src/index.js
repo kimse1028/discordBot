@@ -49,17 +49,18 @@ function createScheduledTime(hour, minute) {
     0,
   );
 
-  // UTC로 변환
-  const utcScheduled = new Date(scheduledDate.getTime());
+  // 예약 시간에서 9시간 빼기
+  const adjustedScheduled = new Date(
+    scheduledDate.getTime() - 9 * 60 * 60 * 1000,
+  );
 
-  // 현재 UTC 시간보다 이전인 경우 다음 날로 설정
+  // 현재 시간보다 이전인 경우 다음 날로 설정
   const utcNow = new Date();
-  if (utcScheduled.getTime() <= utcNow.getTime()) {
-    utcScheduled.setDate(utcScheduled.getDate() + 1);
+  if (adjustedScheduled.getTime() <= utcNow.getTime()) {
+    adjustedScheduled.setDate(adjustedScheduled.getDate() + 1);
   }
 
-  // 다시 한국 시간으로 변환하여 반환
-  return new Date(utcScheduled.getTime());
+  return adjustedScheduled;
 }
 
 // 시간 유효성 검사 함수

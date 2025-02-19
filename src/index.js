@@ -102,7 +102,8 @@ function getRandomItem(array) {
 const fortuneData = {
   // 운세 등급과 확률 (총합 100)
   grades: [
-    { grade: "대길", probability: 5, color: "#FF0000", emoji: "🔱" },
+    { grade: "태초", probability: 0.2, color: "#FFFFFF", emoji: "✨" },
+    { grade: "대길", probability: 4.8, color: "#FF0000", emoji: "🔱" },
     { grade: "중길", probability: 25, color: "#FFA500", emoji: "🌟" },
     { grade: "소길", probability: 35, color: "#FFFF00", emoji: "⭐" },
     { grade: "흉", probability: 25, color: "#A9A9A9", emoji: "⚠️" },
@@ -148,8 +149,11 @@ const fortuneData = {
   },
   // 각 분야별 메시지
   categories: {
-    // 행동 지침 데이터 추가
     study: {
+      태초: [
+        "우주의 지식이 당신에게 흘러들어옵니다",
+        "초월적인 깨달음으로 모든 것이 명확해질 것입니다",
+      ],
       대길: [
         "공부한 모든 것이 완벽하게 이해될 것입니다",
         "놀라운 집중력으로 큰 성과를 이룰 수 있습니다",
@@ -172,6 +176,10 @@ const fortuneData = {
       ],
     },
     work: {
+      태초: [
+        "당신의 업적이 역사에 기록될 것입니다",
+        "세상을 변화시킬 혁신을 이룰 것입니다",
+      ],
       대길: [
         "큰 성과를 이룰 수 있는 날입니다",
         "승진이나 좋은 기회가 찾아올 수 있습니다",
@@ -194,6 +202,10 @@ const fortuneData = {
       ],
     },
     money: {
+      태초: [
+        "돈의 개념을 초월한 부를 얻게 될 것입니다",
+        "황금비가 내리는 날입니다",
+      ],
       대길: [
         "예상치 못한 수입이 생길 수 있습니다",
         "투자한 것에서 큰 수익이 있을 것입니다",
@@ -737,29 +749,96 @@ client.on("interactionCreate", async (interaction) => {
         );
 
         let content = null;
+        let specialEffects = [];
 
-        if (fortune.grade.grade === "대흉") {
+        if (fortune.grade.grade === "태초") {
+          // 태초 등급 전용 특수 효과
+          content = `@everyone\n
+🌟 경 이 로 운 · 순 간 🌟
+⠀
+✨✨✨  태 초 등 급  ✨✨✨
+⠀
+${interaction.member.displayName}님께서 0.2%의 확률을 뚫고
+태초 등급을 획득하셨습니다!
+⠀
+축하의 의미로 태초의 빛이 내립니다...`;
+
+          // 특수 효과 메시지들
+          specialEffects = [
+            "```diff\n+ 우주가 진동하기 시작합니다...```",
+            "```fix\n☆ 태초의 기운이 흐릅니다... ☆```",
+            "```yaml\n시공간이 뒤틀리기 시작합니다...```",
+            "```css\n[ 태초의 문이 열립니다... ]```",
+            `${interaction.member.displayName}님의 운명이 재정의됩니다...`,
+          ];
+
+          // 임베드 색상을 무지개 효과로
+          embed.setColor(
+            "#" + Math.floor(Math.random() * 16777215).toString(16),
+          );
+        } else if (fortune.grade.grade === "대흉") {
           content = "오늘은 하루종일 집에서 쉬는건 어떨까요...";
         } else if (fortune.grade.grade === "대길") {
-          // 대길일 경우 전체 알림 메시지
           content = `@everyone\n🎊 ${interaction.member.displayName}님께서 대길을 받으셨습니다!! 모두 축하해주세요!! 🎉`;
 
           // 추가 축하 메시지 채널에 보내기
           try {
             await interaction.channel.send({
               content: `축하합니다! ${interaction.member.displayName}님의 오늘 운세는 ${fortune.grade.emoji} 대길 입니다!!\n행운이 가득한 하루 되세요! 🍀`,
-              allowedMentions: { parse: [] }, // 이 메시지에서는 멘션 비활성화
+              allowedMentions: { parse: [] },
             });
           } catch (error) {
             console.error("축하 메시지 전송 실패:", error);
           }
         }
 
+        // 먼저 운세 결과 전송
         await interaction.reply({
           content,
           embeds: [embed],
-          allowedMentions: { parse: ["everyone"] }, // @everyone 멘션 활성화
+          allowedMentions: { parse: ["everyone"] },
         });
+
+        // 태초 등급일 경우 특수 효과 순차 전송
+        if (fortune.grade.grade === "태초") {
+          for (const effect of specialEffects) {
+            await new Promise((resolve) => setTimeout(resolve, 1500)); // 1.5초 간격
+            await interaction.channel.send(effect);
+          }
+
+          // 마지막 대형 효과
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          // 태초 메시지를 여러 가지 코드 블록 스타일로 표현
+          await interaction.channel.send(`\`\`\`fix
+⭐️ ⋆ ˚｡⋆୨୧˚ 태 초 의 축 복 ˚୨୧⋆｡˚ ⋆ ⭐️
+\`\`\``);
+
+          await new Promise((resolve) => setTimeout(resolve, 800));
+
+          await interaction.channel.send(`\`\`\`diff
++ ₊⊹⭒══════════════════════════⭒⊹₊
++    신들의 축복이 내립니다...
++ ₊⊹⭒══════════════════════════⭒⊹₊
+\`\`\``);
+
+          await new Promise((resolve) => setTimeout(resolve, 800));
+
+          await interaction.channel.send(`\`\`\`yaml
+이 상서로운 기운은 천년에 한번 올까말까한 기회입니다!
+\`\`\``);
+
+          await new Promise((resolve) => setTimeout(resolve, 800));
+
+          await interaction.channel.send(`\`\`\`css
+[당신의 오늘은 전설이 될 것입니다...]
+\`\`\``);
+
+          await new Promise((resolve) => setTimeout(resolve, 800));
+
+          await interaction.channel.send(`\`\`\`css
+[행복한 하루 되세요!]
+\`\`\``);
+        }
       }
       // 날씨 커맨드 핸들러
       if (interaction.commandName === "날씨") {

@@ -17,6 +17,10 @@ const {
 } = require("discord.js");
 const dotenv = require("dotenv");
 
+// 네이버 지도 API 관련 상수
+const NAVER_CLIENT_ID = process.env.NAVER_CLIENT_ID;
+const NAVER_CLIENT_SECRET = process.env.NAVER_CLIENT_SECRET;
+
 // 현재 한국 시간 Date 객체 가져오기
 function getCurrentKoreanDate() {
   const utcNow = new Date();
@@ -293,6 +297,15 @@ const client = new Client({
 // 슬래시 커맨드 정의
 const commands = [
   new SlashCommandBuilder()
+    .setName("맛집추천")
+    .setDescription("주변 맛집을 추천해드립니다")
+    .addStringOption((option) =>
+      option
+        .setName("지역")
+        .setDescription("검색할 지역을 입력하세요 (예: 강남역, 홍대입구역)")
+        .setRequired(true),
+    ),
+  new SlashCommandBuilder()
     .setName("게임모집")
     .setDescription("게임 참가자를 모집합니다")
     .addStringOption((option) =>
@@ -495,6 +508,45 @@ async function getWeather(location) {
     console.error("날씨 정보 조회 중 에러:", error);
     throw error;
   }
+}
+
+// 네이버 지도 API 호출 함수
+async function searchRestaurants(location) {
+  try {
+    // 검색어에 '맛집' 키워드 추가
+    const query = encodeURIComponent(`${location} 맛집`);
+    const url = `https://openapi.naver.com/v1/search/local.json?query=${query}&display=15&sort=random`;
+
+    const response = await axios.get(url, {
+      headers: {
+        "X-Naver-Client-Id": NAVER_CLIENT_ID,
+        "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
+      },
+    });
+
+    return response.data.items;
+  } catch (error) {
+    console.error("네이버 API 호출 중 에러:", error);
+    throw error;
+  }
+}
+
+// 맛집 추천 임베드 생성 함수
+function createRestaurantEmbed(restaurant, location) {
+  const embed = new EmbedBuilder()
+    .setColor("#03C75A") // 네이버 색상
+    .setTitle(`🍽️ ${restaurant.title.replace(/<[^>]*>/g, "")}`)
+    .setDescription(`${location} 주변 맛집을 추천해드립니다!`)
+    .addFields(
+      { name: "📍 주소", value: restaurant.address },
+      { name: "📞 연락처", value: restaurant.telephone || "번호 없음" },
+      { name: "🔍 카테고리", value: restaurant.category || "정보 없음" },
+      { name: "🌐 상세정보", value: restaurant.link || "정보 없음" },
+    )
+    .setFooter({ text: "데이터 제공: 네이버 지도" })
+    .setTimestamp();
+
+  return embed;
 }
 
 // 운세 생성 함수
@@ -788,6 +840,43 @@ client.on("interactionCreate", async (interaction) => {
 
     // 슬래시 커맨드 처리
     if (interaction.isCommand()) {
+      if (interaction.commandName === "맛집추천") {
+        try {
+          await interaction.deferReply();
+
+          const location = interaction.options.getString("지역");
+          const restaurants = await searchRestaurants(location);
+
+          if (!restaurants || restaurants.length === 0) {
+            await interaction.editReply(
+              "해당 지역의 맛집 정보를 찾을 수 없습니다.",
+            );
+            return;
+          }
+
+          // 랜덤하게 하나의 맛집 선택
+          const restaurant =
+            restaurants[Math.floor(Math.random() * restaurants.length)];
+          const embed = createRestaurantEmbed(restaurant, location);
+
+          // 새로운 추천 받기 버튼 생성
+          const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`reroll_restaurant_${location}`)
+              .setLabel("다른 맛집 추천받기")
+              .setStyle(ButtonStyle.Primary)
+              .setEmoji("🎲"),
+          );
+
+          await interaction.editReply({
+            embeds: [embed],
+            components: [row],
+          });
+        } catch (error) {
+          console.error("맛집 검색 중 에러:", error);
+          await interaction.editReply("맛집 검색 중 오류가 발생했습니다.");
+        }
+      }
       if (interaction.commandName === "운세") {
         const fortune = generateFortune(interaction.user.id);
         const embed = createFortuneEmbed(
@@ -1131,189 +1220,272 @@ ${interaction.member.displayName}님께서 0.2%의 확률을 뚫고
 
     // 버튼 클릭 처리
     if (interaction.isButton()) {
-      const [action, messageId] = interaction.customId.split("_");
-      const gameData = gameParticipants.get(messageId);
-      if (!gameData) return;
+      try {
+        // 맛집 재추천 버튼 처리
+        if (interaction.customId.startsWith("reroll_restaurant_")) {
+          await interaction.deferUpdate();
+          const location = interaction.customId.replace(
+            "reroll_restaurant_",
+            "",
+          );
 
-      // 모집 취소 처리
-      if (action === "cancel") {
-        if (interaction.member.id !== gameData.hostId) {
-          await interaction.reply({
-            content: "니가 만든거 아니자나 쓰바라마!",
-            ephemeral: true,
-          });
-          return;
-        }
+          try {
+            const restaurants = await searchRestaurants(location);
 
-        const embed = EmbedBuilder.from(interaction.message.embeds[0])
-          .setColor("#ff0000")
-          .setTitle("❌ 모집이 취소됐다!!")
-          .setDescription("모집자가 예약을 취소했습니다.");
-
-        // 참가자들에게 DM으로 취소 알림
-        await Promise.all(
-          gameData.participantIds.map(async (participantId) => {
-            try {
-              const user = await client.users.fetch(participantId);
-              await user.send({
-                content: `❌ ${gameData.game} 예약이 취소되었습니다.`,
+            if (!restaurants || restaurants.length === 0) {
+              return await interaction.editReply({
+                content: "해당 지역의 맛집 정보를 찾을 수 없습니다.",
+                embeds: [],
+                components: [],
               });
-            } catch (error) {
-              console.error(
-                `Failed to send cancellation DM to ${participantId}:`,
-                error,
-              );
             }
-          }),
-        );
 
-        const disabledRow = new ActionRowBuilder().addComponents(
-          interaction.message.components[0].components.map((button) =>
-            ButtonBuilder.from(button).setDisabled(true),
-          ),
-        );
+            const restaurant =
+              restaurants[Math.floor(Math.random() * restaurants.length)];
+            const embed = createRestaurantEmbed(restaurant, location);
+            const row = new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`reroll_restaurant_${location}`)
+                .setLabel("다른 맛집 추천받기")
+                .setStyle(ButtonStyle.Primary)
+                .setEmoji("🎲"),
+            );
 
-        await interaction.update({
-          embeds: [embed],
-          components: [disabledRow],
-        });
+            return await interaction.editReply({
+              embeds: [embed],
+              components: [row],
+            });
+          } catch (error) {
+            console.error("맛집 재검색 중 에러:", error);
+            return await interaction.editReply({
+              content: "맛집 재검색 중 오류가 발생했습니다.",
+              embeds: [],
+              components: [],
+            });
+          }
+        }
 
-        if (gameData.useEveryone) {
+        // 게임 관련 버튼 처리
+        const [action, messageId] = interaction.customId.split("_");
+        const gameData = gameParticipants.get(messageId);
+        if (!gameData) return;
+
+        // 게임 취소 처리
+        if (action === "cancel") {
+          if (interaction.member.id !== gameData.hostId) {
+            return await interaction.reply({
+              content: "니가 만든거 아니자나 쓰바라마!",
+              ephemeral: true,
+            });
+          }
+
+          const embed = EmbedBuilder.from(interaction.message.embeds[0])
+            .setColor("#ff0000")
+            .setTitle("❌ 모집이 취소됐다!!")
+            .setDescription("모집자가 예약을 취소했습니다.");
+
+          // 참가자들에게 DM 전송
+          await Promise.all(
+            gameData.participantIds.map(async (participantId) => {
+              try {
+                const user = await client.users.fetch(participantId);
+                await user.send({
+                  content: `❌ ${gameData.game} 예약이 취소되었습니다.`,
+                });
+              } catch (error) {
+                console.error(
+                  `Failed to send cancellation DM to ${participantId}:`,
+                  error,
+                );
+              }
+            }),
+          );
+
+          const disabledRow = new ActionRowBuilder().addComponents(
+            interaction.message.components[0].components.map((button) =>
+              ButtonBuilder.from(button).setDisabled(true),
+            ),
+          );
+
+          await interaction.update({
+            embeds: [embed],
+            components: [disabledRow],
+          });
+
+          if (gameData.useEveryone) {
+            await interaction.channel.send({
+              content: "❌ 모집이 취소됐다!!",
+            });
+          }
+
+          cleanupGame(messageId);
+          return;
+        }
+
+        // 게임 참가 처리
+        if (action === "join") {
+          if (interaction.member.id === gameData.hostId) {
+            return await interaction.reply({
+              content: "니는 모집자잖아 쓰바라마!",
+              ephemeral: true,
+            });
+          }
+
+          if (gameData.participantIds.includes(interaction.member.id)) {
+            return await interaction.reply({
+              content: "니는 이미 참가했는데 쓰바라마!",
+              ephemeral: true,
+            });
+          }
+
+          if (gameData.participants.length >= gameData.maxPlayers) {
+            return await interaction.reply({
+              content: "꽉찼다!! 늦었다!! 쓰바라마!!!",
+              ephemeral: true,
+            });
+          }
+
+          gameData.participants.push(interaction.member.displayName);
+          gameData.participantIds.push(interaction.member.id);
+        }
+
+        // 게임 퇴장 처리
+        if (action === "leave") {
+          if (interaction.member.id === gameData.hostId) {
+            return await interaction.reply({
+              content: "히히 못 가!",
+              ephemeral: true,
+            });
+          }
+
+          if (!gameData.participantIds.includes(interaction.member.id)) {
+            return await interaction.reply({
+              content: "참가 하고 눌러라 쓰바라마!",
+              ephemeral: true,
+            });
+          }
+
+          const index = gameData.participants.indexOf(
+            interaction.member.displayName,
+          );
+          if (index > -1) {
+            gameData.participants.splice(index, 1);
+            gameData.participantIds.splice(index, 1);
+          }
+        }
+
+        // 인원 가득 참 확인 부분
+        if (gameData.participants.length === gameData.maxPlayers) {
+          const embed = EmbedBuilder.from(interaction.message.embeds[0])
+            .setColor("#00ff00")
+            .setTitle("✅ 모집 완료다!!")
+            .spliceFields(2, 1, {
+              name: "현재 인원",
+              value: `${gameData.participants.length}명`,
+              inline: true,
+            })
+            .spliceFields(3, 1, {
+              // 이 부분이 예약 시간 필드를 덮어쓰고 있었습니다
+              name: "참가자 목록",
+              value: gameData.participants
+                .map((p, i) => `${i + 1}. ${p}`)
+                .join("\n"),
+            });
+
+          // setFields를 사용하여 모든 필드를 명시적으로 설정
+          embed.setFields(
+            { name: "모집자", value: gameData.host, inline: true },
+            {
+              name: "모집 인원",
+              value: `${gameData.maxPlayers}명`,
+              inline: true,
+            },
+            {
+              name: "현재 인원",
+              value: `${gameData.participants.length}명`,
+              inline: true,
+            },
+            {
+              name: "예약 시간",
+              value: formatTime(gameData.scheduledTime),
+              inline: true,
+            },
+            {
+              name: "참가자 목록",
+              value: gameData.participants
+                .map((p, i) => `${i + 1}. ${p}`)
+                .join("\n"),
+            },
+          );
+
+          const disabledRow = new ActionRowBuilder().addComponents(
+            interaction.message.components[0].components.map((button) =>
+              ButtonBuilder.from(button).setDisabled(true),
+            ),
+          );
+
+          const mentions = gameData.participantIds
+            .map((id) => `<@${id}>`)
+            .join(", ");
+
           await interaction.channel.send({
-            content: "❌ 모집이 취소됐다!!",
+            content: `${mentions}\n모집 완료다!! ${formatTime(gameData.scheduledTime)}까지 모여라!! 🎮`,
+            embeds: [embed],
           });
-        }
 
-        cleanupGame(messageId);
-        return;
-      }
-
-      // 참가 처리
-      if (action === "join") {
-        if (interaction.member.id === gameData.hostId) {
-          await interaction.reply({
-            content: "니는 모집자잖아 쓰바라마!",
-            ephemeral: true,
+          await interaction.update({
+            embeds: [embed],
+            components: [disabledRow],
           });
           return;
         }
 
-        if (gameData.participantIds.includes(interaction.member.id)) {
-          await interaction.reply({
-            content: "니는 이미 참가했는데 쓰바라마!",
-            ephemeral: true,
-          });
-          return;
-        }
-
-        if (gameData.participants.length >= gameData.maxPlayers) {
-          await interaction.reply({
-            content: "꽉찼다!! 늦었다!! 쓰바라마!!!",
-            ephemeral: true,
-          });
-          return;
-        }
-
-        gameData.participants.push(interaction.member.displayName);
-        gameData.participantIds.push(interaction.member.id);
-      }
-      // 퇴장 처리
-      else if (action === "leave") {
-        if (interaction.member.id === gameData.hostId) {
-          await interaction.reply({
-            content: "히히 못 가!",
-            ephemeral: true,
-          });
-          return;
-        }
-
-        if (!gameData.participantIds.includes(interaction.member.id)) {
-          await interaction.reply({
-            content: "참가 하고 눌러라 쓰바라마!",
-            ephemeral: true,
-          });
-          return;
-        }
-
-        const index = gameData.participants.indexOf(
-          interaction.member.displayName,
-        );
-        if (index > -1) {
-          gameData.participants.splice(index, 1);
-          gameData.participantIds.splice(index, 1);
-        }
-      }
-
-      // 인원이 다 찼는지 확인
-      if (gameData.participants.length === gameData.maxPlayers) {
-        const embed = EmbedBuilder.from(interaction.message.embeds[0])
-          .setColor("#00ff00")
-          .setTitle("✅ 모집 완료다!!")
-          .spliceFields(2, 1, {
+        // 임베드 업데이트
+        const embed = EmbedBuilder.from(
+          interaction.message.embeds[0],
+        ).setFields(
+          { name: "모집자", value: gameData.host, inline: true },
+          {
+            name: "모집 인원",
+            value: `${gameData.maxPlayers}명`,
+            inline: true,
+          },
+          {
             name: "현재 인원",
             value: `${gameData.participants.length}명`,
             inline: true,
-          })
-          .spliceFields(3, 1, {
+          },
+          {
+            name: "예약 시간",
+            value: formatTime(gameData.scheduledTime),
+            inline: true,
+          },
+          {
             name: "참가자 목록",
             value: gameData.participants
               .map((p, i) => `${i + 1}. ${p}`)
               .join("\n"),
-          });
-
-        const disabledRow = new ActionRowBuilder().addComponents(
-          interaction.message.components[0].components.map((button) =>
-            ButtonBuilder.from(button).setDisabled(true),
-          ),
+          },
         );
 
-        const mentions = gameData.participantIds
-          .map((id) => `<@${id}>`)
-          .join(", ");
-
-        await interaction.channel.send({
-          content: `${mentions}\n모집 완료다!! ${formatTime(gameData.scheduledTime)}까지 모여라!! 🎮`,
-          embeds: [embed],
-        });
-
-        await interaction.update({
-          embeds: [embed],
-          components: [disabledRow],
-        });
-        return;
+        await interaction.update({ embeds: [embed] });
+      } catch (error) {
+        console.error("상호작용 처리 중 에러:", error);
+        try {
+          const errorMessage =
+            "처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.";
+          if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({ content: errorMessage, ephemeral: true });
+          } else {
+            await interaction.followUp({
+              content: errorMessage,
+              ephemeral: true,
+            });
+          }
+        } catch (e) {
+          console.error("에러 메시지 전송 실패:", e);
+        }
       }
-
-      // 임베드 업데이트
-      const embed = EmbedBuilder.from(interaction.message.embeds[0]).setFields(
-        {
-          name: "모집자",
-          value: gameData.host,
-          inline: true,
-        },
-        {
-          name: "모집 인원",
-          value: `${gameData.maxPlayers}명`,
-          inline: true,
-        },
-        {
-          name: "현재 인원",
-          value: `${gameData.participants.length}명`,
-          inline: true,
-        },
-        {
-          name: "예약 시간",
-          value: formatTime(gameData.scheduledTime),
-          inline: true,
-        },
-        {
-          name: "참가자 목록",
-          value: gameData.participants
-            .map((p, i) => `${i + 1}. ${p}`)
-            .join("\n"),
-        },
-      );
-
-      await interaction.update({ embeds: [embed] });
     }
   } catch (error) {
     console.error("Interaction 처리 중 에러 발생:", error);

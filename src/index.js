@@ -1374,7 +1374,7 @@ ${interaction.member.displayName}님께서 0.2%의 확률을 뚫고
           }
         }
 
-        // 인원 가득 참 확인
+        // 인원 가득 참 확인 부분
         if (gameData.participants.length === gameData.maxPlayers) {
           const embed = EmbedBuilder.from(interaction.message.embeds[0])
             .setColor("#00ff00")
@@ -1385,11 +1385,38 @@ ${interaction.member.displayName}님께서 0.2%의 확률을 뚫고
               inline: true,
             })
             .spliceFields(3, 1, {
+              // 이 부분이 예약 시간 필드를 덮어쓰고 있었습니다
               name: "참가자 목록",
               value: gameData.participants
                 .map((p, i) => `${i + 1}. ${p}`)
                 .join("\n"),
             });
+
+          // setFields를 사용하여 모든 필드를 명시적으로 설정
+          embed.setFields(
+            { name: "모집자", value: gameData.host, inline: true },
+            {
+              name: "모집 인원",
+              value: `${gameData.maxPlayers}명`,
+              inline: true,
+            },
+            {
+              name: "현재 인원",
+              value: `${gameData.participants.length}명`,
+              inline: true,
+            },
+            {
+              name: "예약 시간",
+              value: formatTime(gameData.scheduledTime),
+              inline: true,
+            },
+            {
+              name: "참가자 목록",
+              value: gameData.participants
+                .map((p, i) => `${i + 1}. ${p}`)
+                .join("\n"),
+            },
+          );
 
           const disabledRow = new ActionRowBuilder().addComponents(
             interaction.message.components[0].components.map((button) =>

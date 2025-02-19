@@ -1,5 +1,6 @@
 const { db, ggckWordsRef } = require("./db/firebase");
 const { isAdmin, setAdmin } = require("./db/firebase");
+const { Timestamp } = require("firebase-admin/firestore");
 const axios = require("axios");
 
 const {
@@ -15,6 +16,60 @@ const {
   PermissionsBitField,
 } = require("discord.js");
 const dotenv = require("dotenv");
+
+// 한국 시간 관련 상수 및 유틸리티 함수들
+const KR_TIME_DIFF = 9 * 60 * 60 * 1000; // 한국 시간대 (UTC+9)
+
+// 현재 한국 시간 Date 객체 가져오기
+function getCurrentKoreanDate() {
+  return new Date(); // 시스템 시간을 그대로 사용
+}
+
+// Date 객체를 Firebase Timestamp로 변환 (UTC 기준)
+function getKoreanTimestamp(date) {
+  return Timestamp.fromDate(date); // 직접 변환
+}
+
+// Firebase Timestamp를 한국 시간 Date 객체로 변환
+function koreanDateFromTimestamp(timestamp) {
+  return timestamp.toDate(); // 직접 변환
+}
+
+// 게임 예약 시간 설정 함수
+function createScheduledTime(hour, minute) {
+  const now = getCurrentKoreanDate();
+  const scheduledDate = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    hour,
+    minute,
+    0,
+  );
+
+  // 현재 시간보다 이전인 경우 다음 날로 설정
+  if (scheduledDate.getTime() <= now.getTime()) {
+    scheduledDate.setDate(scheduledDate.getDate() + 1);
+  }
+
+  return scheduledDate;
+}
+
+// 시간 유효성 검사 함수
+function isValidTime(scheduledDate) {
+  const now = getCurrentKoreanDate();
+  const minTime = new Date(now.getTime() + 10 * 60 * 1000); // 현재 시간 + 10분
+  return scheduledDate.getTime() > minTime.getTime();
+}
+
+// 전역 시간 포맷팅 함수
+const formatTime = (date) => {
+  return new Intl.DateTimeFormat("ko-KR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+};
 
 // 날씨 아이콘 매핑
 const weatherIcons = {
@@ -175,11 +230,6 @@ const client = new Client({
     GatewayIntentBits.GuildPresences,
   ],
 });
-
-// 전역 시간 포맷팅 함수
-const formatTime = (date) => {
-  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
-};
 
 // 슬래시 커맨드 정의
 const commands = [
@@ -587,20 +637,30 @@ function setGameTimer(client, messageId, gameData, scheduledTime) {
   gameTimers.set(messageId, timer);
 }
 
-// 게임 생성 시 호출되는 함수
+// 게임 생성 함수 수정
 function createGame(client, interaction, gameData) {
   const messageId = Date.now().toString();
 
-  // 채널 ID 저장 추가
-  const enhancedGameData = {
+  // Firebase에 저장할 데이터 준비
+  const gameDoc = {
     ...gameData,
     channel: interaction.channelId,
-    endTime: gameData.scheduledTime.getTime(),
+    scheduledTimestamp: getKoreanTimestamp(gameData.scheduledTime), // Timestamp로 변환
+    createdAt: Timestamp.now(),
   };
 
-  gameParticipants.set(messageId, enhancedGameData);
-  setGameTimer(client, messageId, enhancedGameData, gameData.scheduledTime);
+  // Firestore에 게임 데이터 저장
+  db.collection("games")
+    .doc(messageId)
+    .set(gameDoc)
+    .catch((error) => console.error("Error saving game data:", error));
 
+  gameParticipants.set(messageId, {
+    ...gameDoc,
+    endTime: gameData.scheduledTime.getTime(),
+  });
+
+  setGameTimer(client, messageId, gameDoc, gameData.scheduledTime);
   return messageId;
 }
 
@@ -724,26 +784,44 @@ client.on("interactionCreate", async (interaction) => {
         const minute = interaction.options.getInteger("분");
         const useEveryone = interaction.options.getBoolean("전체알림") ?? false;
 
-        const now = new Date();
-        const scheduledDate = new Date();
-        scheduledDate.setHours(hour, minute, 0, 0);
+        // createScheduledTime 함수를 사용하여 예약 시간 설정
+        const scheduledDate = createScheduledTime(hour, minute);
 
-        // 시간 유효성 검사 함수
-        function isValidTime(date) {
-          const minTime = new Date();
-          minTime.setMinutes(minTime.getMinutes()); // 최소 10분 이후
+        // 디버깅을 위한 로그 추가
+        console.log(
+          "현재 한국 시간:",
+          new Intl.DateTimeFormat("ko-KR", {
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false,
+          }).format(getCurrentKoreanDate()),
+        );
 
-          return date > minTime;
-        }
+        console.log(
+          "예약된 시간:",
+          new Intl.DateTimeFormat("ko-KR", {
+            timeZone: "Asia/Seoul",
+            year: "numeric",
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            second: "2-digit",
+            hour12: false,
+          }).format(scheduledDate),
+        );
 
-        // 시간 유효성 검사
-        if (!isValidTime(scheduledDate)) {
-          await interaction.reply({
-            content: "현재 시간보다 최소 10분 이후로만 예약할 수 있습니다!",
-            ephemeral: true,
-          });
-          return;
-        }
+        console.log(
+          "시간 차이(분):",
+          Math.round(
+            (scheduledDate.getTime() - getCurrentKoreanDate().getTime()) /
+              (1000 * 60),
+          ),
+        );
 
         const messageId = createGame(client, interaction, {
           host: interaction.member.displayName,
@@ -769,7 +847,7 @@ client.on("interactionCreate", async (interaction) => {
             { name: "현재 인원", value: "1명", inline: true },
             {
               name: "예약 시간",
-              value: formatTime(scheduledDate),
+              value: formatTime(scheduledDate), // formatTime 함수는 이미 한국 시간으로 변환
               inline: true,
             },
             { name: "설명", value: description },

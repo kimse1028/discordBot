@@ -17,25 +17,22 @@ const {
 } = require("discord.js");
 const dotenv = require("dotenv");
 
-// 한국 시간 관련 상수 및 유틸리티 함수들
-const KR_TIME_DIFF = 9 * 60 * 60 * 1000; // 한국 시간대 (UTC+9)
-
 // 현재 한국 시간 Date 객체 가져오기
 function getCurrentKoreanDate() {
   const utcNow = new Date();
-  return new Date(utcNow.getTime() + KR_TIME_DIFF);
+  return new Date(utcNow.getTime());
 }
 
 // Date 객체를 Firebase Timestamp로 변환 (UTC 기준)
 function getKoreanTimestamp(date) {
-  const utcTime = new Date(date.getTime() - KR_TIME_DIFF);
+  const utcTime = new Date(date.getTime());
   return Timestamp.fromDate(utcTime);
 }
 
 // Firebase Timestamp를 한국 시간 Date 객체로 변환
 function koreanDateFromTimestamp(timestamp) {
   const utcDate = timestamp.toDate();
-  return new Date(utcDate.getTime() + KR_TIME_DIFF);
+  return new Date(utcDate.getTime());
 }
 
 // 게임 예약 시간 설정 함수
@@ -53,7 +50,7 @@ function createScheduledTime(hour, minute) {
   );
 
   // UTC로 변환
-  const utcScheduled = new Date(scheduledDate.getTime() - KR_TIME_DIFF);
+  const utcScheduled = new Date(scheduledDate.getTime());
 
   // 현재 UTC 시간보다 이전인 경우 다음 날로 설정
   const utcNow = new Date();
@@ -62,7 +59,7 @@ function createScheduledTime(hour, minute) {
   }
 
   // 다시 한국 시간으로 변환하여 반환
-  return new Date(utcScheduled.getTime() + KR_TIME_DIFF);
+  return new Date(utcScheduled.getTime());
 }
 
 // 시간 유효성 검사 함수

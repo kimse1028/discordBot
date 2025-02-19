@@ -17,6 +17,10 @@ const {
 } = require("discord.js");
 const dotenv = require("dotenv");
 
+// 네이버 지도 API 관련 상수
+const NAVER_CLIENT_ID = process.env.NAVER_CLIENT_ID;
+const NAVER_CLIENT_SECRET = process.env.NAVER_CLIENT_SECRET;
+
 // 현재 한국 시간 Date 객체 가져오기
 function getCurrentKoreanDate() {
   const utcNow = new Date();
@@ -293,6 +297,15 @@ const client = new Client({
 // 슬래시 커맨드 정의
 const commands = [
   new SlashCommandBuilder()
+    .setName("메뉴추천")
+    .setDescription("주변 맛집을 추천해드립니다")
+    .addStringOption((option) =>
+      option
+        .setName("지역")
+        .setDescription("검색할 지역을 입력하세요 (예: 강남역, 홍대입구역)")
+        .setRequired(true),
+    ),
+  new SlashCommandBuilder()
     .setName("게임모집")
     .setDescription("게임 참가자를 모집합니다")
     .addStringOption((option) =>
@@ -495,6 +508,45 @@ async function getWeather(location) {
     console.error("날씨 정보 조회 중 에러:", error);
     throw error;
   }
+}
+
+// 네이버 지도 API 호출 함수
+async function searchRestaurants(location) {
+  try {
+    // 검색어에 '맛집' 키워드 추가
+    const query = encodeURIComponent(`${location} 맛집`);
+    const url = `https://openapi.naver.com/v1/search/local.json?query=${query}&display=15&sort=random`;
+
+    const response = await axios.get(url, {
+      headers: {
+        "X-Naver-Client-Id": NAVER_CLIENT_ID,
+        "X-Naver-Client-Secret": NAVER_CLIENT_SECRET,
+      },
+    });
+
+    return response.data.items;
+  } catch (error) {
+    console.error("네이버 API 호출 중 에러:", error);
+    throw error;
+  }
+}
+
+// 맛집 추천 임베드 생성 함수
+function createRestaurantEmbed(restaurant, location) {
+  const embed = new EmbedBuilder()
+    .setColor("#03C75A") // 네이버 색상
+    .setTitle(`🍽️ ${restaurant.title.replace(/<[^>]*>/g, "")}`)
+    .setDescription(`${location} 주변 맛집을 추천해드립니다!`)
+    .addFields(
+      { name: "📍 주소", value: restaurant.address },
+      { name: "📞 연락처", value: restaurant.telephone || "번호 없음" },
+      { name: "🔍 카테고리", value: restaurant.category || "정보 없음" },
+      { name: "🌐 상세정보", value: restaurant.link || "정보 없음" },
+    )
+    .setFooter({ text: "데이터 제공: 네이버 지도" })
+    .setTimestamp();
+
+  return embed;
 }
 
 // 운세 생성 함수
@@ -788,6 +840,43 @@ client.on("interactionCreate", async (interaction) => {
 
     // 슬래시 커맨드 처리
     if (interaction.isCommand()) {
+      if (interaction.commandName === "메뉴추천") {
+        try {
+          await interaction.deferReply();
+
+          const location = interaction.options.getString("지역");
+          const restaurants = await searchRestaurants(location);
+
+          if (!restaurants || restaurants.length === 0) {
+            await interaction.editReply(
+              "해당 지역의 맛집 정보를 찾을 수 없습니다.",
+            );
+            return;
+          }
+
+          // 랜덤하게 하나의 맛집 선택
+          const restaurant =
+            restaurants[Math.floor(Math.random() * restaurants.length)];
+          const embed = createRestaurantEmbed(restaurant, location);
+
+          // 새로운 추천 받기 버튼 생성
+          const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`reroll_restaurant_${location}`)
+              .setLabel("다른 맛집 추천받기")
+              .setStyle(ButtonStyle.Primary)
+              .setEmoji("🎲"),
+          );
+
+          await interaction.editReply({
+            embeds: [embed],
+            components: [row],
+          });
+        } catch (error) {
+          console.error("맛집 검색 중 에러:", error);
+          await interaction.editReply("맛집 검색 중 오류가 발생했습니다.");
+        }
+      }
       if (interaction.commandName === "운세") {
         const fortune = generateFortune(interaction.user.id);
         const embed = createFortuneEmbed(
@@ -1134,6 +1223,48 @@ ${interaction.member.displayName}님께서 0.2%의 확률을 뚫고
       const [action, messageId] = interaction.customId.split("_");
       const gameData = gameParticipants.get(messageId);
       if (!gameData) return;
+
+      if (
+        interaction.isButton() &&
+        interaction.customId.startsWith("reroll_restaurant_")
+      ) {
+        try {
+          await interaction.deferUpdate();
+
+          const location = interaction.customId.replace(
+            "reroll_restaurant_",
+            "",
+          );
+          const restaurants = await searchRestaurants(location);
+
+          if (!restaurants || restaurants.length === 0) {
+            await interaction.editReply(
+              "해당 지역의 맛집 정보를 찾을 수 없습니다.",
+            );
+            return;
+          }
+
+          const restaurant =
+            restaurants[Math.floor(Math.random() * restaurants.length)];
+          const embed = createRestaurantEmbed(restaurant, location);
+
+          const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`reroll_restaurant_${location}`)
+              .setLabel("다른 맛집 추천받기")
+              .setStyle(ButtonStyle.Primary)
+              .setEmoji("🎲"),
+          );
+
+          await interaction.editReply({
+            embeds: [embed],
+            components: [row],
+          });
+        } catch (error) {
+          console.error("맛집 재검색 중 에러:", error);
+          await interaction.editReply("맛집 재검색 중 오류가 발생했습니다.");
+        }
+      }
 
       // 모집 취소 처리
       if (action === "cancel") {

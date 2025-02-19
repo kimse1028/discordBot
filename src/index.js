@@ -440,9 +440,16 @@ async function getWeather(location) {
 
 // 운세 생성 함수
 function generateFortune(userId) {
-  const today = new Date().toISOString().split("T")[0];
-  let seed = parseInt(userId + today.replace(/-/g, ""));
+  const now = new Date();
+  const today = now.toISOString().slice(0, 10).replace(/-/g, "");
 
+  // 현재 시간을 그대로 표시
+  console.log("현재 시간:", now.toLocaleString("ko-KR"));
+  console.log("운세 날짜:", today);
+
+  let seed = parseInt(userId + today);
+
+  // 나머지 코드는 그대로 유지
   const seedRandom = () => {
     let x = Math.sin(seed++) * 10000;
     return x - Math.floor(x);

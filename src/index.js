@@ -153,12 +153,12 @@ function getRandomItem(array) {
 const fortuneData = {
   // 운세 등급과 확률 (총합 100)
   grades: [
-    { grade: "태초", probability: 0.2, color: "#FFFFFF", emoji: "✨" },
-    { grade: "대길", probability: 4.8, color: "#FF0000", emoji: "🔱" },
+    { grade: "태초", probability: 1, color: "#FFFFFF", emoji: "✨" },
+    { grade: "대길", probability: 9.5, color: "#FF0000", emoji: "🔱" },
     { grade: "중길", probability: 25, color: "#FFA500", emoji: "🌟" },
     { grade: "소길", probability: 35, color: "#FFFF00", emoji: "⭐" },
-    { grade: "흉", probability: 25, color: "#A9A9A9", emoji: "⚠️" },
-    { grade: "대흉", probability: 10, color: "#4A4A4A", emoji: "💀" },
+    { grade: "흉", probability: 20, color: "#A9A9A9", emoji: "⚠️" },
+    { grade: "대흉", probability: 9.5, color: "#4A4A4A", emoji: "💀" },
   ],
   advice: {
     // 피해야 할 것들
@@ -556,8 +556,27 @@ function generateFortune(userId) {
   // 한국 날짜 기준으로 YYYYMMDD 형식 생성
   const today = koreanNow.toISOString().slice(0, 10).replace(/-/g, "");
 
-  // 시드 생성 방식 (한국 시간 기준 날짜 사용)
+  // 시드 생성 방식 변경 (한국 시간 기준 날짜 사용)
   let seed = parseInt(userId.toString() + today, 10) % Number.MAX_SAFE_INTEGER;
+
+  // 로그 출력 추가: 현재 날짜/시간 및 시드번호
+  console.log(
+    "운세 생성 정보:",
+    new Intl.DateTimeFormat("ko-KR", {
+      timeZone: "Asia/Seoul", // 명시적으로 한국 시간대 지정
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    }).format(koreanNow),
+    "| 사용자 ID:",
+    userId,
+    "| 시드번호:",
+    seed,
+  );
 
   // 시드 랜덤 함수 수정
   const seedRandom = () => {
@@ -593,6 +612,15 @@ function generateFortune(userId) {
     fortuneData.advice.do[
       Math.floor(seedRandom() * fortuneData.advice.do.length)
     ];
+
+  // 로그에 운세 등급도 출력
+  console.log(
+    "운세 등급:",
+    selectedGrade.grade,
+    "| 확률:",
+    selectedGrade.probability,
+    "%",
+  );
 
   return {
     grade: selectedGrade,

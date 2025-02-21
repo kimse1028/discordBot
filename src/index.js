@@ -551,10 +551,12 @@ function createRestaurantEmbed(restaurant, location) {
 
 // 운세 생성 함수
 function generateFortune(userId) {
-  const now = new Date();
-  const today = now.toISOString().slice(0, 10).replace(/-/g, "");
+  // 한국 시간 기준으로 현재 날짜 가져오기
+  const koreanNow = getCurrentKoreanDate();
+  // 한국 날짜 기준으로 YYYYMMDD 형식 생성
+  const today = koreanNow.toISOString().slice(0, 10).replace(/-/g, "");
 
-  // 시드 생성 방식 변경
+  // 시드 생성 방식 (한국 시간 기준 날짜 사용)
   let seed = parseInt(userId.toString() + today, 10) % Number.MAX_SAFE_INTEGER;
 
   // 시드 랜덤 함수 수정
@@ -583,7 +585,6 @@ function generateFortune(userId) {
     return messages[Math.floor(seedRandom() * messages.length)];
   };
 
-  // 조언 메시지 선택
   const avoidThis =
     fortuneData.advice.avoid[
       Math.floor(seedRandom() * fortuneData.advice.avoid.length)

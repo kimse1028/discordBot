@@ -551,19 +551,23 @@ function createRestaurantEmbed(restaurant, location) {
 
 // 운세 생성 함수
 function generateFortune(userId) {
-  // 한국 시간 기준으로 현재 날짜 가져오기
+  // 기존 한국 시간 가져오기 사용
   const koreanNow = getCurrentKoreanDate();
-  // 한국 날짜 기준으로 YYYYMMDD 형식 생성
   const today = koreanNow.toISOString().slice(0, 10).replace(/-/g, "");
 
-  // 시드 생성 방식 변경 (한국 시간 기준 날짜 사용)
-  let seed = parseInt(userId.toString() + today, 10) % Number.MAX_SAFE_INTEGER;
+  // 더 복잡한 시드 생성
+  let seed = 0;
+  const input = userId.toString() + today;
+  for (let i = 0; i < input.length; i++) {
+    seed = (seed << 5) - seed + input.charCodeAt(i);
+    seed = seed >>> 0; // 부호 없는 32비트 정수로 변환
+  }
 
-  // 로그 출력 추가: 현재 날짜/시간 및 시드번호
+  // 시드 생성 과정 로깅
   console.log(
     "운세 생성 정보:",
     new Intl.DateTimeFormat("ko-KR", {
-      timeZone: "Asia/Seoul", // 명시적으로 한국 시간대 지정
+      timeZone: "Asia/Seoul",
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
@@ -572,15 +576,18 @@ function generateFortune(userId) {
       second: "2-digit",
       hour12: false,
     }).format(koreanNow),
-    "| 사용자 ID:",
+    "\n입력값:",
+    input,
+    "\n사용자 ID:",
     userId,
-    "| 시드번호:",
+    "\n시드번호:",
     seed,
+    "\n원본 날짜:",
+    today,
   );
 
-  // 시드 랜덤 함수 수정
   const seedRandom = () => {
-    // Mulberry32 알고리즘 사용
+    // Mulberry32 알고리즘
     seed = (seed + 0x6d2b79f5) | 0;
     let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
     t = Math.imul(t + (t >>> 7), 61 | t) ^ t;
@@ -599,6 +606,18 @@ function generateFortune(userId) {
     }
   }
 
+  // 운세 결과도 로깅
+  console.log(
+    "랜덤 값:",
+    random,
+    "\n선택된 등급:",
+    selectedGrade.grade,
+    "\n확률:",
+    selectedGrade.probability,
+    "%",
+  );
+
+  // 나머지 부분은 그대로 유지
   const getRandomMessage = (category, grade) => {
     const messages = fortuneData.categories[category][grade.grade];
     return messages[Math.floor(seedRandom() * messages.length)];
@@ -612,15 +631,6 @@ function generateFortune(userId) {
     fortuneData.advice.do[
       Math.floor(seedRandom() * fortuneData.advice.do.length)
     ];
-
-  // 로그에 운세 등급도 출력
-  console.log(
-    "운세 등급:",
-    selectedGrade.grade,
-    "| 확률:",
-    selectedGrade.probability,
-    "%",
-  );
 
   return {
     grade: selectedGrade,

@@ -17,6 +17,15 @@ const {
 } = require("discord.js");
 const dotenv = require("dotenv");
 
+// TFT API 관련 상수
+const RIOT_API_KEY = process.env.RIOT_API_KEY;
+const TFT_API_BASE = "https://kr.api.riotgames.com/tft";
+const LEAGUE_API_BASE = `${TFT_API_BASE}/league/v1`;
+const MATCH_API_BASE = `${TFT_API_BASE}/match/v1`;
+
+// 아이템 통계를 저장할 Firebase 컬렉션
+const tftStatsRef = db.collection("tftStats");
+
 // 네이버 지도 API 관련 상수
 const NAVER_CLIENT_ID = process.env.NAVER_CLIENT_ID;
 const NAVER_CLIENT_SECRET = process.env.NAVER_CLIENT_SECRET;
@@ -297,6 +306,17 @@ const client = new Client({
 // 슬래시 커맨드 정의
 const commands = [
   new SlashCommandBuilder()
+    .setName("tft아이템")
+    .setDescription(
+      "TFT 챔피언의 최적 아이템을 조회합니다(마스터 티어 이상의 통계이므로 토달지마세요)",
+    )
+    .addStringOption((option) =>
+      option
+        .setName("챔피언")
+        .setDescription("아이템을 알고 싶은 챔피언의 이름을 입력하세요")
+        .setRequired(true),
+    ),
+  new SlashCommandBuilder()
     .setName("맛집추천")
     .setDescription("주변 맛집을 추천해드립니다")
     .addStringOption((option) =>
@@ -559,6 +579,159 @@ function createRestaurantEmbed(restaurant, location) {
     .setTimestamp();
 
   return embed;
+}
+
+// 챔피언별 아이템 통계 수집 함수
+async function collectChampionItemStats() {
+  try {
+    // 마스터 이상 플레이어 목록 조회
+    const [masterPlayers, grandmasterPlayers, challengerPlayers] =
+      await Promise.all([
+        axios.get(`${LEAGUE_API_BASE}/master`, {
+          headers: { "X-Riot-Token": RIOT_API_KEY },
+        }),
+        axios.get(`${LEAGUE_API_BASE}/grandmaster`, {
+          headers: { "X-Riot-Token": RIOT_API_KEY },
+        }),
+        axios.get(`${LEAGUE_API_BASE}/challenger`, {
+          headers: { "X-Riot-Token": RIOT_API_KEY },
+        }),
+      ]);
+
+    const highEloPlayers = [
+      ...masterPlayers.data.entries,
+      ...grandmasterPlayers.data.entries,
+      ...challengerPlayers.data.entries,
+    ];
+
+    // 최근 매치 데이터 수집
+    const matchStats = new Map(); // 챔피언별 아이템 통계
+
+    for (const player of highEloPlayers.slice(0, 10)) {
+      // API 제한으로 인해 일부만 수집
+      const puuid = await getPuuid(player.summonerId);
+      const matches = await getRecentMatches(puuid);
+
+      for (const matchId of matches) {
+        const matchData = await getMatchDetails(matchId);
+        processMatchData(matchData, matchStats);
+      }
+    }
+
+    // 통계 데이터 Firebase에 저장
+    for (const [champion, stats] of matchStats.entries()) {
+      await tftStatsRef.doc(champion).set({
+        items: processItemStats(stats.items),
+        updatedAt: new Date(),
+      });
+    }
+
+    console.log("TFT 통계 데이터 업데이트 완료");
+  } catch (error) {
+    console.error("TFT 통계 수집 중 에러:", error);
+  }
+}
+
+// puuid 조회
+async function getPuuid(summonerId) {
+  const response = await axios.get(
+    `https://kr.api.riotgames.com/tft/summoner/v1/summoners/${summonerId}`,
+    {
+      headers: { "X-Riot-Token": RIOT_API_KEY },
+    },
+  );
+  return response.data.puuid;
+}
+
+// 최근 매치 목록 조회
+async function getRecentMatches(puuid) {
+  const response = await axios.get(
+    `${MATCH_API_BASE}/matches/by-puuid/${puuid}/ids?count=5`,
+    {
+      headers: { "X-Riot-Token": RIOT_API_KEY },
+    },
+  );
+  return response.data;
+}
+
+// 매치 상세 정보 조회
+async function getMatchDetails(matchId) {
+  const response = await axios.get(`${MATCH_API_BASE}/matches/${matchId}`, {
+    headers: { "X-Riot-Token": RIOT_API_KEY },
+  });
+  return response.data;
+}
+
+// 매치 데이터 처리
+function processMatchData(matchData, matchStats) {
+  for (const participant of matchData.info.participants) {
+    if (participant.placement <= 4) {
+      // 상위 4등 이내의 데이터만 수집
+      for (const unit of participant.units) {
+        if (!matchStats.has(unit.character_id)) {
+          matchStats.set(unit.character_id, { items: new Map() });
+        }
+
+        const champStats = matchStats.get(unit.character_id);
+        for (const itemId of unit.items) {
+          champStats.items.set(itemId, (champStats.items.get(itemId) || 0) + 1);
+        }
+      }
+    }
+  }
+}
+
+// 아이템 통계 처리
+function processItemStats(itemsMap) {
+  return Array.from(itemsMap.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([itemId, count]) => ({
+      itemId,
+      count,
+    }));
+}
+
+// 매 6시간마다 통계 업데이트
+setInterval(collectChampionItemStats, 6 * 60 * 60 * 1000);
+
+// 챔피언 아이템 조회 처리
+async function handleTftItemsCommand(interaction) {
+  try {
+    await interaction.deferReply();
+
+    const champion = interaction.options.getString("챔피언");
+    const statsDoc = await tftStatsRef.doc(champion).get();
+
+    if (!statsDoc.exists) {
+      await interaction.editReply(
+        `${champion}의 통계 데이터를 찾을 수 없습니다.`,
+      );
+      return;
+    }
+
+    const stats = statsDoc.data();
+    const embed = new EmbedBuilder()
+      .setColor("#0099ff")
+      .setTitle(`${champion} 추천 아이템`)
+      .setDescription("마스터 티어 이상 유저들의 선호 아이템입니다.")
+      .addFields(
+        stats.items.map((item, index) => ({
+          name: `${index + 1}순위 아이템`,
+          value: `아이템 ID: ${item.itemId}\n채택률: ${((item.count / stats.items[0].count) * 100).toFixed(1)}%`,
+          inline: true,
+        })),
+      )
+      .setFooter({ text: "6시간마다 업데이트됩니다." })
+      .setTimestamp(stats.updatedAt.toDate());
+
+    await interaction.editReply({ embeds: [embed] });
+  } catch (error) {
+    console.error("TFT 아이템 조회 중 에러:", error);
+    await interaction.editReply(
+      "아이템 정보를 조회하는 중 오류가 발생했습니다.",
+    );
+  }
 }
 
 // 운세 생성 함수
@@ -891,6 +1064,9 @@ client.on("interactionCreate", async (interaction) => {
 
     // 슬래시 커맨드 처리
     if (interaction.isCommand()) {
+      if (interaction.commandName === "tft아이템") {
+        await handleTftItemsCommand(interaction);
+      }
       if (interaction.commandName === "맛집추천") {
         try {
           await interaction.deferReply();

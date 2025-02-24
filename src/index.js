@@ -384,6 +384,18 @@ const commands = [
     )
     .addStringOption((option) =>
       option
+        .setName("분류")
+        .setDescription("단어의 분류")
+        .setRequired(true)
+        .addChoices(
+          { name: "강찬어", value: "강찬어" },
+          { name: "신조어", value: "신조어" },
+          { name: "감탄사", value: "감탄사" },
+          { name: "기타", value: "기타" },
+        ),
+    )
+    .addStringOption((option) =>
+      option
         .setName("창시자")
         .setDescription("의미 만든 사람")
         .setRequired(true),

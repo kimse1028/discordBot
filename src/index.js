@@ -19,6 +19,98 @@ const {
 } = require("discord.js");
 const dotenv = require("dotenv");
 
+// 피파 API 관련 상수
+const FCONLINE_API_KEY = process.env.FCONLINE_API_KEY;
+
+// 1. 피파 온라인 API 호출 함수 추가
+// 닉네임으로 OUID 조회
+async function getFifaOUID(nickname) {
+  try {
+    const encodedNickname = encodeURIComponent(nickname);
+    const response = await axios.get(
+      `https://open.api.nexon.com/fconline/v1/id?nickname=${encodedNickname}`,
+      {
+        headers: { Authorization: process.env.FCONLINE_API_KEY },
+      },
+    );
+    return response.data; // OUID 반환
+  } catch (error) {
+    console.error("피파 OUID 조회 중 에러:", error.message);
+    throw error;
+  }
+}
+
+// 기본 유저 정보 조회
+async function getFifaUserInfo(ouid) {
+  try {
+    const response = await axios.get(
+      `https://open.api.nexon.com/fconline/v1/user/basic?ouid=${ouid}`,
+      {
+        headers: { Authorization: process.env.FCONLINE_API_KEY },
+      },
+    );
+    return response.data;
+  } catch (error) {
+    console.error("피파 유저 정보 조회 중 에러:", error.message);
+    throw error;
+  }
+}
+
+// 최고 등급 정보 조회
+async function getFifaMaxDivision(ouid) {
+  try {
+    const response = await axios.get(
+      `https://open.api.nexon.com/fconline/v1/user/maxdivision?ouid=${ouid}`,
+      {
+        headers: { Authorization: process.env.FCONLINE_API_KEY },
+      },
+    );
+    return response.data;
+  } catch (error) {
+    console.error("피파 최고 등급 정보 조회 중 에러:", error.message);
+    throw error;
+  }
+}
+
+// 디비전(티어) 이름 반환 함수
+function getDivisionName(division) {
+  // 디비전 코드에 따른 이름 매핑
+  const divisionNames = {
+    800: "슈퍼챔피언스",
+    900: "챔피언스",
+    1000: "슈퍼챌린지",
+    1100: "챌린지1",
+    1200: "챌린지2",
+    1300: "챌린지3",
+    2000: "월드클래스1",
+    2100: "월드클래스2",
+    2200: "월드클래스3",
+    2300: "프로1",
+    2400: "프로2",
+    2500: "프로3",
+    2600: "세미프로1",
+    2700: "세미프로2",
+    2800: "세미프로3",
+    2900: "아마추어1",
+    3000: "아마추어2",
+    3100: "아마추어3",
+  };
+
+  return divisionNames[division] || "알 수 없음";
+}
+
+// 매치 타입 이름 반환 함수
+function getMatchTypeName(matchType) {
+  const matchTypeNames = {
+    50: "공식경기",
+    52: "감독모드",
+    40: "친선경기",
+    60: "볼타모드",
+  };
+
+  return matchTypeNames[matchType] || "기타";
+}
+
 // Riot API 관련 상수
 const RIOT_API_KEY = process.env.RIOT_API_KEY;
 const TFT_API_BASE = "https://kr.api.riotgames.com/tft";
@@ -524,6 +616,15 @@ const client = new Client({
 
 // 슬래시 커맨드 정의
 const commands = [
+  new SlashCommandBuilder()
+    .setName("피파")
+    .setDescription("피파 온라인 사용자 정보를 조회합니다")
+    .addStringOption((option) =>
+      option
+        .setName("닉네임")
+        .setDescription("조회할 사용자 닉네임을 입력하세요")
+        .setRequired(true),
+    ),
   new SlashCommandBuilder()
     .setName("tft아이템")
     .setDescription("TFT 챔피언의 최적 아이템을 조회합니다")
@@ -1141,6 +1242,94 @@ async function handleTftItemsCommand(interaction) {
   }
 }
 
+// 3. 피파 온라인 정보 조회 핸들러 함수
+async function handleFifaCommand(interaction) {
+  try {
+    await interaction.deferReply();
+
+    const nickname = interaction.options.getString("닉네임");
+
+    // OUID 조회
+    const ouid = await getFifaOUID(nickname);
+    if (!ouid) {
+      return await interaction.editReply(
+        `'${nickname}' 사용자를 찾을 수 없습니다.`,
+      );
+    }
+
+    // 기본 정보 조회
+    const userInfo = await getFifaUserInfo(ouid);
+
+    // 최고 등급 정보 조회
+    const maxDivisions = await getFifaMaxDivision(ouid);
+
+    // Embed 생성
+    const embed = new EmbedBuilder()
+      .setColor("#0099ff")
+      .setTitle(`🎮 ${userInfo.nickname}님의 피파 온라인 정보`)
+      .setDescription(`레벨: ${userInfo.level}`)
+      .setThumbnail(
+        "https://ssl.nexon.com/s2/game/fo4/shop/playerkits/230/p230147.png",
+      ) // 피파 관련 이미지 (변경 가능)
+      .setTimestamp();
+
+    // 최고 등급 정보 추가
+    if (maxDivisions && maxDivisions.length > 0) {
+      maxDivisions.forEach((division) => {
+        const matchName = getMatchTypeName(division.matchType);
+        const divisionName = getDivisionName(division.division);
+        const achievementDate = new Date(division.achievementDate);
+
+        // 날짜 포매팅
+        const formattedDate = new Intl.DateTimeFormat("ko-KR", {
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        }).format(achievementDate);
+
+        embed.addFields({
+          name: `${matchName} 최고 등급`,
+          value: `${divisionName} (달성일: ${formattedDate})`,
+          inline: true,
+        });
+      });
+    } else {
+      embed.addFields({
+        name: "최고 등급 정보",
+        value: "등급 정보가 없습니다",
+        inline: true,
+      });
+    }
+
+    embed.addFields({
+      name: "플레이어 ID",
+      value: `\`${ouid}\``,
+      inline: false,
+    });
+
+    await interaction.editReply({ embeds: [embed] });
+  } catch (error) {
+    console.error("피파 정보 조회 중 에러:", error);
+
+    let errorMessage = "정보를 조회하는 중 오류가 발생했습니다.";
+    if (error.response) {
+      if (error.response.status === 404) {
+        errorMessage = "존재하지 않는 사용자입니다.";
+      } else if (error.response.status === 429) {
+        errorMessage =
+          "너무 많은 요청이 있었습니다. 잠시 후 다시 시도해주세요.";
+      } else if (
+        error.response.status === 401 ||
+        error.response.status === 403
+      ) {
+        errorMessage = "API 키가 유효하지 않습니다. 관리자에게 문의하세요.";
+      }
+    }
+
+    await interaction.editReply(errorMessage);
+  }
+}
+
 // 운세 생성 함수
 function generateFortune(userId) {
   // 기존 한국 시간 가져오기 사용
@@ -1474,6 +1663,9 @@ client.on("interactionCreate", async (interaction) => {
 
     // 슬래시 커맨드 처리
     if (interaction.isCommand()) {
+      if (interaction.commandName === "피파") {
+        await handleFifaCommand(interaction);
+      }
       if (interaction.commandName === "tft아이템") {
         await handleTftItemsCommand(interaction);
       }

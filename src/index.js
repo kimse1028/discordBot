@@ -19,6 +19,127 @@ const {
 } = require("discord.js");
 const dotenv = require("dotenv");
 
+// 피파 API 관련 상수
+const FCONLINE_API_KEY = process.env.FCONLINE_API_KEY;
+
+// 1. 피파 온라인 API 호출 함수 추가
+// 닉네임으로 OUID 조회
+async function getFifaOUID(nickname) {
+  try {
+    const encodedNickname = encodeURIComponent(nickname);
+    const response = await axios.get(
+      `https://open.api.nexon.com/fconline/v1/id?nickname=${encodedNickname}`,
+      {
+        headers: { "x-nxopen-api-key": process.env.FCONLINE_API_KEY },
+      },
+    );
+    console.log("OUID 응답 데이터:", JSON.stringify(response.data));
+
+    // 객체에서 ouid 속성 추출하여 반환
+    if (response.data && response.data.ouid) {
+      return response.data.ouid;
+    } else {
+      console.error("OUID를 찾을 수 없음:", response.data);
+      return null;
+    }
+  } catch (error) {
+    console.error("피파 OUID 조회 중 에러:", error.message);
+    if (error.response && error.response.data) {
+      console.error(
+        "응답 에러 상세 정보:",
+        JSON.stringify(error.response.data),
+      );
+    }
+    throw error;
+  }
+}
+
+// 기본 유저 정보 조회
+async function getFifaUserInfo(ouid) {
+  try {
+    console.log(`유저 정보 API 호출 (OUID: ${ouid})`);
+    const response = await axios.get(
+      `https://open.api.nexon.com/fconline/v1/user/basic?ouid=${ouid}`,
+      {
+        headers: { "x-nxopen-api-key": process.env.FCONLINE_API_KEY },
+      },
+    );
+    console.log("유저 정보 응답 데이터:", JSON.stringify(response.data));
+    return response.data;
+  } catch (error) {
+    console.error("피파 유저 정보 조회 중 에러:", error.message);
+    if (error.response && error.response.data) {
+      console.error(
+        "응답 에러 상세 정보:",
+        JSON.stringify(error.response.data),
+      );
+    }
+    throw error;
+  }
+}
+
+// 최고 등급 정보 조회
+async function getFifaMaxDivision(ouid) {
+  try {
+    console.log(`최고 등급 API 호출 (OUID: ${ouid})`);
+    const response = await axios.get(
+      `https://open.api.nexon.com/fconline/v1/user/maxdivision?ouid=${ouid}`,
+      {
+        headers: { "x-nxopen-api-key": process.env.FCONLINE_API_KEY },
+      },
+    );
+    console.log("최고 등급 응답 데이터:", JSON.stringify(response.data));
+    return response.data;
+  } catch (error) {
+    console.error("피파 최고 등급 정보 조회 중 에러:", error.message);
+    if (error.response && error.response.data) {
+      console.error(
+        "응답 에러 상세 정보:",
+        JSON.stringify(error.response.data),
+      );
+    }
+    throw error;
+  }
+}
+
+// 디비전(티어) 이름 반환 함수
+function getDivisionName(division) {
+  const divisionNames = {
+    800: "슈퍼챔피언스",
+    900: "챔피언스",
+    1000: "슈퍼챌린지",
+    1100: "챌린지1",
+    1200: "챌린지2",
+    1300: "챌린지3",
+    2000: "월드클래스1",
+    2100: "월드클래스2",
+    2200: "월드클래스3",
+    2300: "프로1",
+    2400: "프로2",
+    2500: "프로3",
+    2600: "세미프로1",
+    2700: "세미프로2",
+    2800: "세미프로3",
+    2900: "아마추어1",
+    3000: "아마추어2",
+    3100: "아마추어3",
+  };
+
+  return divisionNames[division] || `알 수 없음(${division})`;
+}
+
+// 매치 타입 이름 반환 함수
+function getMatchTypeName(matchType) {
+  const matchTypeNames = {
+    50: "공식경기",
+    52: "감독모드",
+    40: "친선경기",
+    60: "볼타모드",
+  };
+
+  return matchTypeNames[matchType] || `기타(${matchType})`;
+}
+
 // Riot API 관련 상수
 const RIOT_API_KEY = process.env.RIOT_API_KEY;
 const TFT_API_BASE = "https://kr.api.riotgames.com/tft";
@@ -88,7 +209,13 @@ class RiotRateLimiter {
     }
   }
 
-  async checkAndWait(methodPath) {
+  async checkAndWait(methodPath, retryCount = 0) {
+    // 최대 재시도 횟수(3회) 확인
+    if (retryCount >= 3) {
+      console.error(`Rate Limiter 최대 재시도 횟수(3회) 초과: ${methodPath}`);
+      throw new Error(`Rate Limit 대기 시간 초과 (최대 재시도 횟수 초과)`);
+    }
+
     // API 메소드 경로에서 기본 경로 추출 (예: tft/match/v1)
     const baseMethod = methodPath.split("/").slice(0, 3).join("/") || "default";
     const methodLimit =
@@ -100,10 +227,10 @@ class RiotRateLimiter {
         methodLimit.interval - (Date.now() - methodLimit.lastReset);
       if (waitTime > 0) {
         console.log(
-          `Method Rate Limit reached for ${baseMethod}, waiting ${waitTime}ms`,
+          `Method Rate Limit reached for ${baseMethod}, waiting ${waitTime}ms (재시도: ${retryCount + 1}/3)`,
         );
         await new Promise((resolve) => setTimeout(resolve, waitTime));
-        return this.checkAndWait(methodPath); // 재귀적으로 다시 확인
+        return this.checkAndWait(methodPath, retryCount + 1); // 재시도 횟수 증가
       }
       methodLimit.count = 0;
       methodLimit.lastReset = Date.now();
@@ -114,9 +241,11 @@ class RiotRateLimiter {
       const waitTime =
         this.appLimit.interval - (Date.now() - this.appLimit.lastReset);
       if (waitTime > 0) {
-        console.log(`App Rate Limit reached, waiting ${waitTime}ms`);
+        console.log(
+          `App Rate Limit reached, waiting ${waitTime}ms (재시도: ${retryCount + 1}/3)`,
+        );
         await new Promise((resolve) => setTimeout(resolve, waitTime));
-        return this.checkAndWait(methodPath); // 재귀적으로 다시 확인
+        return this.checkAndWait(methodPath, retryCount + 1); // 재시도 횟수 증가
       }
       this.appLimit.count = 0;
       this.appLimit.lastReset = Date.now();
@@ -129,18 +258,29 @@ class RiotRateLimiter {
 }
 
 // Riot API 요청 유틸리티 함수
-async function makeRiotRequest(url) {
+async function makeRiotRequest(url, retryCount = 0) {
   try {
     const response = await axios.get(url, {
       headers: { "X-Riot-Token": process.env.RIOT_API_KEY },
     });
     return response.data;
   } catch (error) {
+    // 최대 재시도 횟수(3회) 확인
+    if (retryCount >= 3) {
+      console.error(`최대 재시도 횟수(3회) 초과: ${url}`);
+      throw new Error(
+        `API 요청 실패 (최대 재시도 횟수 초과): ${error.message}`,
+      );
+    }
+
     if (error.response?.status === 429) {
       // Rate limit exceeded - wait and retry
       const retryAfter = error.response.headers["retry-after"] || 1;
+      console.log(
+        `Rate limit 도달, ${retryAfter}초 후 재시도 (${retryCount + 1}/3)`,
+      );
       await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
-      return makeRiotRequest(url);
+      return makeRiotRequest(url, retryCount + 1); // 재시도 횟수 증가
     }
     throw error;
   }
@@ -505,6 +645,15 @@ const client = new Client({
 
 // 슬래시 커맨드 정의
 const commands = [
+  new SlashCommandBuilder()
+    .setName("피파")
+    .setDescription("피파 온라인 사용자 정보를 조회합니다")
+    .addStringOption((option) =>
+      option
+        .setName("닉네임")
+        .setDescription("조회할 사용자 닉네임을 입력하세요")
+        .setRequired(true),
+    ),
   new SlashCommandBuilder()
     .setName("tft아이템")
     .setDescription("TFT 챔피언의 최적 아이템을 조회합니다")
@@ -1122,6 +1271,111 @@ async function handleTftItemsCommand(interaction) {
   }
 }
 
+// 3. 피파 온라인 정보 조회 핸들러 함수
+async function handleFifaCommand(interaction) {
+  try {
+    await interaction.deferReply();
+
+    const nickname = interaction.options.getString("닉네임");
+    console.log(`닉네임 "${nickname}"에 대한 정보 조회 시작...`);
+
+    // OUID 조회 (이제 직접 ouid 문자열 반환)
+    const ouid = await getFifaOUID(nickname);
+    console.log(`OUID 조회 결과: ${ouid} (타입: ${typeof ouid})`);
+
+    if (!ouid) {
+      return await interaction.editReply(
+        `'${nickname}' 사용자를 찾을 수 없습니다.`,
+      );
+    }
+
+    // 기본 정보 조회
+    const userInfo = await getFifaUserInfo(ouid);
+    console.log("사용자 기본 정보:", JSON.stringify(userInfo));
+
+    // 최고 등급 정보 조회
+    const maxDivisions = await getFifaMaxDivision(ouid);
+    console.log("최고 등급 정보:", JSON.stringify(maxDivisions));
+
+    // Embed 생성
+    const embed = new EmbedBuilder()
+      .setColor("#0099ff")
+      .setTitle(`🎮 ${userInfo.nickname || nickname}님의 피파 온라인 정보`)
+      .setDescription(`레벨: ${userInfo.level || "정보 없음"}`)
+      .setThumbnail(
+        "https://ssl.nexon.com/s2/game/fo4/shop/playerkits/230/p230147.png",
+      )
+      .setFooter({ text: "데이터 제공: NEXON OPEN API" })
+      .setTimestamp();
+
+    // 최고 등급 정보 추가
+    if (maxDivisions && maxDivisions.length > 0) {
+      maxDivisions.forEach((division) => {
+        try {
+          const matchName = getMatchTypeName(division.matchType);
+          const divisionName = getDivisionName(division.division);
+
+          // 달성일 포매팅
+          let formattedDate = "정보 없음";
+          if (division.achievementDate) {
+            const achievementDate = new Date(division.achievementDate);
+            formattedDate = new Intl.DateTimeFormat("ko-KR", {
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit",
+            }).format(achievementDate);
+          }
+
+          embed.addFields({
+            name: `${matchName} 최고 등급`,
+            value: `${divisionName} (달성일: ${formattedDate})`,
+            inline: true,
+          });
+        } catch (err) {
+          console.error("등급 정보 처리 중 오류:", err);
+          embed.addFields({
+            name: "등급 정보 오류",
+            value: "등급 정보를 처리하는 중 오류가 발생했습니다.",
+            inline: true,
+          });
+        }
+      });
+    } else {
+      embed.addFields({
+        name: "최고 등급 정보",
+        value: "등급 정보가 없습니다",
+        inline: true,
+      });
+    }
+
+    await interaction.editReply({ embeds: [embed] });
+  } catch (error) {
+    console.error("피파 정보 조회 중 에러:", error);
+
+    let errorMessage = "정보를 조회하는 중 오류가 발생했습니다.";
+    if (error.response) {
+      if (error.response.status === 404) {
+        errorMessage = "존재하지 않는 사용자입니다.";
+      } else if (error.response.status === 429) {
+        errorMessage =
+          "너무 많은 요청이 있었습니다. 잠시 후 다시 시도해주세요.";
+      } else if (
+        error.response.status === 401 ||
+        error.response.status === 403
+      ) {
+        errorMessage = "API 키가 유효하지 않습니다. 관리자에게 문의하세요.";
+      } else if (error.response.status === 400) {
+        errorMessage = "잘못된 요청입니다. 닉네임을 정확히 입력해주세요.";
+        if (error.response.data) {
+          errorMessage += `\n상세 오류: ${JSON.stringify(error.response.data)}`;
+        }
+      }
+    }
+
+    await interaction.editReply(`⚠️ ${errorMessage}`);
+  }
+}
+
 // 운세 생성 함수
 function generateFortune(userId) {
   // 기존 한국 시간 가져오기 사용
@@ -1455,6 +1709,9 @@ client.on("interactionCreate", async (interaction) => {
 
     // 슬래시 커맨드 처리
     if (interaction.isCommand()) {
+      if (interaction.commandName === "피파") {
+        await handleFifaCommand(interaction);
+      }
       if (interaction.commandName === "tft아이템") {
         await handleTftItemsCommand(interaction);
       }

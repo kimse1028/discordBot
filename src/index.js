@@ -1370,6 +1370,29 @@ ${interaction.member.displayName}님께서 0.2%의 확률을 뚫고
           } catch (error) {
             console.error("축하 메시지 전송 실패:", error);
           }
+        } else if (fortune.grade.grade === "존망") {
+          // 존망 등급 전용 특수 효과
+          content = `@everyone\n
+☠️ 비 극 적 인 · 순 간 ☠️
+⠀
+💀💀💀  존 망 등 급  💀💀💀
+⠀
+${interaction.member.displayName}님께서 0.2%의 확률로
+존망 등급의 저주를 받으셨습니다!
+⠀
+불운의 징조로 존망의 그림자가 드리웁니다...`;
+
+          // 특수 효과 메시지들
+          specialEffects = [
+            "```diff\n- 심연이 울부짖기 시작합니다...```",
+            "```fix\n☠ 존망의 기운이 스며듭니다... ☠```",
+            "```yaml\n운명의 실이 끊어지기 시작합니다...```",
+            "```css\n[ 불멸의 문이 닫힙니다... ]```",
+            `${interaction.member.displayName}님의 운명이 뒤틀립니다...`,
+          ];
+
+          // 임베드 색상을 어두운 색으로
+          embed.setColor("#000000"); // 검은색
         }
 
         // 먼저 운세 결과 전송
@@ -1417,6 +1440,47 @@ ${interaction.member.displayName}님께서 0.2%의 확률을 뚫고
 
           await interaction.channel.send(`\`\`\`css
 [행복한 하루 되세요!]
+\`\`\``);
+        }
+
+        // 존망 등급일 경우 특수 효과 순차 전송
+        if (fortune.grade.grade === "존망") {
+          for (const effect of specialEffects) {
+            await new Promise((resolve) => setTimeout(resolve, 1500)); // 1.5초 간격
+            await interaction.channel.send(effect);
+          }
+
+          // 마지막 대형 효과
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          // 존망 메시지를 여러 가지 코드 블록 스타일로 표현
+          await interaction.channel.send(`\`\`\`fix
+☠️ ⋆ ˚｡⋆୨୧˚ 존 망 의 저 주 ˚୨୧⋆｡˚ ⋆ ☠️
+\`\`\``);
+
+          await new Promise((resolve) => setTimeout(resolve, 800));
+
+          await interaction.channel.send(`\`\`\`diff
+- ₊⊹⭒══════════════════════════⭒⊹₊
+-    심연의 저주가 깃듭니다...
+- ₊⊹⭒══════════════════════════⭒⊹₊
+\`\`\``);
+
+          await new Promise((resolve) => setTimeout(resolve, 800));
+
+          await interaction.channel.send(`\`\`\`yaml
+이 불길한 조짐은 천년에 한번 올까말까한 파멸의 징조입니다!
+\`\`\``);
+
+          await new Promise((resolve) => setTimeout(resolve, 800));
+
+          await interaction.channel.send(`\`\`\`css
+[당신의 오늘은 역사에 기록될 불운으로 남을 것입니다...]
+\`\`\``);
+
+          await new Promise((resolve) => setTimeout(resolve, 800));
+
+          await interaction.channel.send(`\`\`\`css
+[모든 선택에 신중하세요... 운명이 당신을 주시합니다...]
 \`\`\``);
         }
       }

@@ -88,7 +88,13 @@ class RiotRateLimiter {
     }
   }
 
-  async checkAndWait(methodPath) {
+  async checkAndWait(methodPath, retryCount = 0) {
+    // 최대 재시도 횟수(3회) 확인
+    if (retryCount >= 3) {
+      console.error(`Rate Limiter 최대 재시도 횟수(3회) 초과: ${methodPath}`);
+      throw new Error(`Rate Limit 대기 시간 초과 (최대 재시도 횟수 초과)`);
+    }
+
     // API 메소드 경로에서 기본 경로 추출 (예: tft/match/v1)
     const baseMethod = methodPath.split("/").slice(0, 3).join("/") || "default";
     const methodLimit =
@@ -100,10 +106,10 @@ class RiotRateLimiter {
         methodLimit.interval - (Date.now() - methodLimit.lastReset);
       if (waitTime > 0) {
         console.log(
-          `Method Rate Limit reached for ${baseMethod}, waiting ${waitTime}ms`,
+          `Method Rate Limit reached for ${baseMethod}, waiting ${waitTime}ms (재시도: ${retryCount + 1}/3)`,
         );
         await new Promise((resolve) => setTimeout(resolve, waitTime));
-        return this.checkAndWait(methodPath); // 재귀적으로 다시 확인
+        return this.checkAndWait(methodPath, retryCount + 1); // 재시도 횟수 증가
       }
       methodLimit.count = 0;
       methodLimit.lastReset = Date.now();
@@ -114,9 +120,11 @@ class RiotRateLimiter {
       const waitTime =
         this.appLimit.interval - (Date.now() - this.appLimit.lastReset);
       if (waitTime > 0) {
-        console.log(`App Rate Limit reached, waiting ${waitTime}ms`);
+        console.log(
+          `App Rate Limit reached, waiting ${waitTime}ms (재시도: ${retryCount + 1}/3)`,
+        );
         await new Promise((resolve) => setTimeout(resolve, waitTime));
-        return this.checkAndWait(methodPath); // 재귀적으로 다시 확인
+        return this.checkAndWait(methodPath, retryCount + 1); // 재시도 횟수 증가
       }
       this.appLimit.count = 0;
       this.appLimit.lastReset = Date.now();
@@ -129,18 +137,29 @@ class RiotRateLimiter {
 }
 
 // Riot API 요청 유틸리티 함수
-async function makeRiotRequest(url) {
+async function makeRiotRequest(url, retryCount = 0) {
   try {
     const response = await axios.get(url, {
       headers: { "X-Riot-Token": process.env.RIOT_API_KEY },
     });
     return response.data;
   } catch (error) {
+    // 최대 재시도 횟수(3회) 확인
+    if (retryCount >= 3) {
+      console.error(`최대 재시도 횟수(3회) 초과: ${url}`);
+      throw new Error(
+        `API 요청 실패 (최대 재시도 횟수 초과): ${error.message}`,
+      );
+    }
+
     if (error.response?.status === 429) {
       // Rate limit exceeded - wait and retry
       const retryAfter = error.response.headers["retry-after"] || 1;
+      console.log(
+        `Rate limit 도달, ${retryAfter}초 후 재시도 (${retryCount + 1}/3)`,
+      );
       await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
-      return makeRiotRequest(url);
+      return makeRiotRequest(url, retryCount + 1); // 재시도 횟수 증가
     }
     throw error;
   }

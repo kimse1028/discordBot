@@ -2,6 +2,8 @@ const { db, ggckWordsRef } = require("./db/firebase");
 const { isAdmin, setAdmin } = require("./db/firebase");
 const { Timestamp } = require("firebase-admin/firestore");
 const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
 
 const {
   Client,
@@ -16,6 +18,150 @@ const {
   PermissionsBitField,
 } = require("discord.js");
 const dotenv = require("dotenv");
+
+// Riot API 관련 상수
+const RIOT_API_KEY = process.env.RIOT_API_KEY;
+const TFT_API_BASE = "https://kr.api.riotgames.com/tft";
+const LEAGUE_API_BASE = `${TFT_API_BASE}/league/v1`;
+const MATCH_API_BASE = `${TFT_API_BASE}/match/v1`;
+// Riot API 관련 추가 상수
+const GRANDMASTER_API_PATH = `${LEAGUE_API_BASE}/grandmaster`;
+
+// Riot API 관련 상수 아래에 추가
+const CACHE_DURATION = 6 * 60 * 60 * 1000; // 6시간
+const statsCache = new Map();
+
+// API 요청 관리를 위한 Rate Limiter 클래스
+class RiotRateLimiter {
+  constructor() {
+    // 메소드별 Rate Limit 추적
+    this.methodLimits = {
+      "tft/league/v1": {
+        count: 0,
+        lastReset: Date.now(),
+        limit: 50,
+        interval: 60000,
+      },
+      "tft/match/v1": {
+        count: 0,
+        lastReset: Date.now(),
+        limit: 100,
+        interval: 120000,
+      },
+      "tft/summoner/v1": {
+        count: 0,
+        lastReset: Date.now(),
+        limit: 20,
+        interval: 60000,
+      },
+      default: { count: 0, lastReset: Date.now(), limit: 20, interval: 60000 },
+    };
+
+    // 전역 App Rate Limit
+    this.appLimit = {
+      count: 0,
+      lastReset: Date.now(),
+      limit: 100,
+      interval: 120000,
+    };
+
+    // 주기적으로 카운터 리셋
+    setInterval(() => this.resetCounters(), 60000);
+  }
+
+  resetCounters() {
+    const now = Date.now();
+
+    // 각 메소드별 카운터 리셋
+    for (const method in this.methodLimits) {
+      const limit = this.methodLimits[method];
+      if (now - limit.lastReset >= limit.interval) {
+        limit.count = 0;
+        limit.lastReset = now;
+      }
+    }
+
+    // 앱 전체 카운터 리셋
+    if (now - this.appLimit.lastReset >= this.appLimit.interval) {
+      this.appLimit.count = 0;
+      this.appLimit.lastReset = now;
+    }
+  }
+
+  async checkAndWait(methodPath) {
+    // API 메소드 경로에서 기본 경로 추출 (예: tft/match/v1)
+    const baseMethod = methodPath.split("/").slice(0, 3).join("/") || "default";
+    const methodLimit =
+      this.methodLimits[baseMethod] || this.methodLimits.default;
+
+    // 메소드별 Rate Limit 체크
+    if (methodLimit.count >= methodLimit.limit) {
+      const waitTime =
+        methodLimit.interval - (Date.now() - methodLimit.lastReset);
+      if (waitTime > 0) {
+        console.log(
+          `Method Rate Limit reached for ${baseMethod}, waiting ${waitTime}ms`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+        return this.checkAndWait(methodPath); // 재귀적으로 다시 확인
+      }
+      methodLimit.count = 0;
+      methodLimit.lastReset = Date.now();
+    }
+
+    // 앱 전체 Rate Limit 체크
+    if (this.appLimit.count >= this.appLimit.limit) {
+      const waitTime =
+        this.appLimit.interval - (Date.now() - this.appLimit.lastReset);
+      if (waitTime > 0) {
+        console.log(`App Rate Limit reached, waiting ${waitTime}ms`);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+        return this.checkAndWait(methodPath); // 재귀적으로 다시 확인
+      }
+      this.appLimit.count = 0;
+      this.appLimit.lastReset = Date.now();
+    }
+
+    // 카운터 증가
+    methodLimit.count++;
+    this.appLimit.count++;
+  }
+}
+
+// Riot API 요청 유틸리티 함수
+async function makeRiotRequest(url) {
+  try {
+    const response = await axios.get(url, {
+      headers: { "X-Riot-Token": process.env.RIOT_API_KEY },
+    });
+    return response.data;
+  } catch (error) {
+    if (error.response?.status === 429) {
+      // Rate limit exceeded - wait and retry
+      const retryAfter = error.response.headers["retry-after"] || 1;
+      await new Promise((resolve) => setTimeout(resolve, retryAfter * 1000));
+      return makeRiotRequest(url);
+    }
+    throw error;
+  }
+}
+
+// 아이템 통계를 저장할 Firebase 컬렉션
+const tftStatsRef = db.collection("tftStats");
+
+// JSON 파일 불러오기
+const championMapping = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "./data/tftChampions.json"), "utf8"),
+);
+const itemMapping = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "./data/tftItems.json"), "utf8"),
+);
+
+// TFT 아이템 커맨드에서 사용할 자동완성 선택지 생성
+const championChoices = Object.keys(championMapping).map((name) => ({
+  name: name,
+  value: name,
+}));
 
 // 네이버 지도 API 관련 상수
 const NAVER_CLIENT_ID = process.env.NAVER_CLIENT_ID;
@@ -153,12 +299,14 @@ function getRandomItem(array) {
 const fortuneData = {
   // 운세 등급과 확률 (총합 100)
   grades: [
-    { grade: "태초", probability: 1, color: "#FFFFFF", emoji: "✨" },
-    { grade: "대길", probability: 9.5, color: "#FF0000", emoji: "🔱" },
-    { grade: "중길", probability: 25, color: "#FFA500", emoji: "🌟" },
-    { grade: "소길", probability: 35, color: "#FFFF00", emoji: "⭐" },
-    { grade: "흉", probability: 20, color: "#A9A9A9", emoji: "⚠️" },
-    { grade: "대흉", probability: 9.5, color: "#4A4A4A", emoji: "💀" },
+    { grade: "태초", probability: 3, color: "#FFFFFF", emoji: "✨" },
+    { grade: "대길", probability: 7, color: "#FF0000", emoji: "🔱" },
+    { grade: "중길", probability: 15, color: "#FFA500", emoji: "🌟" },
+    { grade: "소길", probability: 25, color: "#FFFF00", emoji: "⭐" },
+    { grade: "평범", probability: 25, color: "#C0C0C0", emoji: "🔄" },
+    { grade: "흉", probability: 15, color: "#A9A9A9", emoji: "⚠️" },
+    { grade: "대흉", probability: 7, color: "#4A4A4A", emoji: "💀" },
+    { grade: "존망", probability: 3, color: "#000000", emoji: "☠️" },
   ],
   advice: {
     // 피해야 할 것들
@@ -178,6 +326,26 @@ const fortuneData = {
       "긴 회의",
       "도박",
       "험한 말",
+      "고집부리기",
+      "과도한 카페인",
+      "불평하기",
+      "약속 취소",
+      "지나친 간식",
+      "비관적 생각",
+      "소셜미디어 논쟁",
+      "오래된 감정에 사로잡히기",
+      "지출 영수증 버리기",
+      "감정적 이메일 보내기",
+      "스마트폰 과다사용",
+      "건강에 해로운 음식",
+      "방 어지럽히기",
+      "불필요한 회의",
+      "약속 시간에 늦기",
+      "남의 말 끊기",
+      "무리한 계획 세우기",
+      "과한 자기비판",
+      "중요한 일 미루기",
+      "건강 체크 미루기",
     ],
     // 해야 할 것들
     do: [
@@ -196,6 +364,26 @@ const fortuneData = {
       "봉사활동",
       "저축",
       "칭찬하기",
+      "감사일기 쓰기",
+      "플랜트 케어",
+      "새로운 레시피 시도",
+      "좋아하는 음악 듣기",
+      "비타민 섭취",
+      "목표 리스트 작성",
+      "단백질 챙겨먹기",
+      "충분한 햇빛 쬐기",
+      "심호흡하기",
+      "오래된 친구에게 연락하기",
+      "집 정리정돈",
+      "새로운 기술 배우기",
+      "적절한 휴식",
+      "재활용 실천하기",
+      "유산소 운동",
+      "올바른 자세 유지하기",
+      "좋은 책 한 권 읽기",
+      "포용적인 태도 갖기",
+      "긍정적인 단어 사용하기",
+      "작은 성취 축하하기",
     ],
   },
   // 각 분야별 메시지
@@ -217,6 +405,10 @@ const fortuneData = {
         "평소처럼 진행하면 무난한 결과가 있을 것입니다",
         "복습이 도움이 될 것입니다",
       ],
+      평범: [
+        "특별한 변화는 없지만 꾸준함이 중요합니다",
+        "기본에 충실하면 점차 나아질 것입니다",
+      ],
       흉: [
         "집중력이 떨어질 수 있으니 주의하세요",
         "기초부터 다시 점검해보는 것이 좋습니다",
@@ -224,6 +416,10 @@ const fortuneData = {
       대흉: [
         "실수하기 쉬운 날입니다. 모든 것을 꼼꼼히 확인하세요",
         "무리한 계획은 피하는 것이 좋습니다",
+      ],
+      존망: [
+        "모든 노력이 수포로 돌아갈 것입니다",
+        "오늘은 아무것도 배우지 못할 것입니다",
       ],
     },
     work: {
@@ -243,6 +439,10 @@ const fortuneData = {
         "무난한 하루가 될 것입니다",
         "평소대로 진행하면 좋은 결과가 있을 것입니다",
       ],
+      평범: [
+        "특별한 일 없이 일상적인 하루가 될 것입니다",
+        "묵묵히 자신의 일에 집중하는 것이 좋습니다",
+      ],
       흉: [
         "의사소통에 오해가 생길 수 있으니 주의하세요",
         "중요한 결정은 미루는 것이 좋습니다",
@@ -250,6 +450,10 @@ const fortuneData = {
       대흉: [
         "중요한 실수가 있을 수 있으니 모든 것을 재확인하세요",
         "새로운 시도는 피하는 것이 좋습니다",
+      ],
+      존망: [
+        "심각한 재앙이 업무에 닥칠 것입니다",
+        "오늘 하는 모든 일은 실패할 운명입니다",
       ],
     },
     money: {
@@ -269,6 +473,10 @@ const fortuneData = {
         "금전적으로 무난한 하루가 될 것입니다",
         "계획했던 지출이 예상대로 진행될 것입니다",
       ],
+      평범: [
+        "큰 지출이나 수입 없이 평범한 하루가 될 것입니다",
+        "현재의 재정 상태를 유지하는 것이 좋습니다",
+      ],
       흉: [
         "예상치 못한 지출이 있을 수 있습니다",
         "금전 거래는 신중하게 결정하세요",
@@ -277,6 +485,7 @@ const fortuneData = {
         "큰 금전적 손실이 있을 수 있으니 모든 거래를 조심하세요",
         "투자나 재테크는 절대 피하세요",
       ],
+      존망: ["파산의 기운이 감돌고 있습니다", "지갑에 구멍이 뚫릴 것입니다"],
     },
   },
 };
@@ -296,6 +505,17 @@ const client = new Client({
 
 // 슬래시 커맨드 정의
 const commands = [
+  new SlashCommandBuilder()
+    .setName("tft아이템")
+    .setDescription("TFT 챔피언의 최적 아이템을 조회합니다")
+    .addStringOption((option) =>
+      option
+        .setName("챔피언")
+        .setDescription(
+          "아이템을 알고 싶은 챔피언의 이름을 입력하세요 (예: 하이머딩거, 베인)",
+        )
+        .setRequired(true),
+    ),
   new SlashCommandBuilder()
     .setName("맛집추천")
     .setDescription("주변 맛집을 추천해드립니다")
@@ -381,6 +601,18 @@ const commands = [
     )
     .addStringOption((option) =>
       option.setName("예문").setDescription("단어 사용 예문").setRequired(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("분류")
+        .setDescription("단어의 분류")
+        .setRequired(true)
+        .addChoices(
+          { name: "강찬어", value: "강찬어" },
+          { name: "신조어", value: "신조어" },
+          { name: "감탄사", value: "감탄사" },
+          { name: "기타", value: "기타" },
+        ),
     )
     .addStringOption((option) =>
       option
@@ -549,11 +781,355 @@ function createRestaurantEmbed(restaurant, location) {
   return embed;
 }
 
+// puuid 조회
+async function getPuuid(summonerId) {
+  try {
+    const data = await makeRiotRequest(
+      `https://kr.api.riotgames.com/tft/summoner/v1/summoners/${summonerId}`,
+    );
+    return data.puuid;
+  } catch (error) {
+    console.error(`getPuuid 에러 (summonerId: ${summonerId}):`, error.message);
+    throw error;
+  }
+}
+
+// 최근 매치 목록 조회
+async function getRecentMatches(puuid) {
+  try {
+    const data = await makeRiotRequest(
+      `${MATCH_API_BASE}/matches/by-puuid/${puuid}/ids?count=3`,
+    );
+    return data;
+  } catch (error) {
+    console.error(
+      `getRecentMatches 에러 (puuid: ${puuid.substring(0, 8)}...):`,
+      error.message,
+    );
+    throw error;
+  }
+}
+
+// 매치 상세 정보 조회
+async function getMatchDetails(matchId) {
+  try {
+    const data = await makeRiotRequest(`${MATCH_API_BASE}/matches/${matchId}`);
+    return data;
+  } catch (error) {
+    console.error(`getMatchDetails 에러 (matchId: ${matchId}):`, error.message);
+    throw error;
+  }
+}
+
+// 챔피언별 아이템 통계 수집 함수
+async function collectChampionItemStats(specificChampions = null) {
+  try {
+    // 캐시 체크는 기존과 동일
+    if (specificChampions?.length === 1) {
+      const champion = specificChampions[0];
+      const cachedStats = statsCache.get(champion);
+      if (cachedStats && Date.now() - cachedStats.timestamp < CACHE_DURATION) {
+        return cachedStats.data;
+      }
+    }
+
+    // 순차적으로 처리
+    console.log("챌린저 티어 데이터 수집 중...");
+    const challengerPlayers = await makeRiotRequest(
+      `${LEAGUE_API_BASE}/challenger`,
+    );
+
+    console.log("그랜드마스터 티어 데이터 수집 중...");
+    const grandmasterPlayers = await makeRiotRequest(
+      `${LEAGUE_API_BASE}/grandmaster`,
+    );
+
+    // 두 티어의 플레이어를 합침
+    const highTierPlayers = [
+      ...challengerPlayers.entries,
+      ...grandmasterPlayers.entries,
+    ];
+
+    // 배치 사이즈를 더 작게 조정하여 요청 부하 감소
+    const BATCH_SIZE = 3;
+    const matchStats = new Map();
+
+    // 플레이어 수 제한 (더 적은 수로 제한)
+    const maxPlayers = 30;
+
+    console.log(`최대 ${maxPlayers}명의 플레이어 데이터를 처리합니다...`);
+
+    // 플레이어 순차 처리 (완전 병렬이 아닌 배치별 순차 처리)
+    for (
+      let i = 0;
+      i < Math.min(highTierPlayers.length, maxPlayers);
+      i += BATCH_SIZE
+    ) {
+      const batch = highTierPlayers.slice(i, i + BATCH_SIZE);
+      console.log(
+        `플레이어 배치 처리 중: ${i + 1}~${Math.min(i + BATCH_SIZE, maxPlayers)}/${maxPlayers}`,
+      );
+
+      // 각 배치 내에서는 병렬 처리
+      await Promise.all(
+        batch.map(async (player) => {
+          try {
+            const puuid = await getPuuid(player.summonerId);
+
+            // 매치 수를 제한 (5에서 3으로 줄임)
+            const matches = await getRecentMatches(puuid);
+            const limitedMatches = matches.slice(0, 3);
+
+            console.log(
+              `플레이어 ${player.summonerName || player.summonerId}의 ${limitedMatches.length}개 매치 처리 중...`,
+            );
+
+            // 매치 순차 처리 (병렬 대신)
+            for (const matchId of limitedMatches) {
+              try {
+                const matchData = await getMatchDetails(matchId);
+                processMatchData(matchData, matchStats, specificChampions);
+
+                // 매치 요청 사이에 딜레이 추가
+                await new Promise((resolve) => setTimeout(resolve, 100));
+              } catch (error) {
+                console.error(`Error processing match ${matchId}:`, error);
+              }
+            }
+          } catch (error) {
+            console.error(
+              `Error processing player ${player.summonerId}:`,
+              error,
+            );
+          }
+        }),
+      );
+
+      // 배치 처리 사이에 딜레이 추가
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+
+    // 결과 처리 및 캐싱 (기존과 동일)
+    const results = new Map();
+    for (const [champion, stats] of matchStats.entries()) {
+      const processedStats = processItemCombinations(stats.itemCombinations);
+      results.set(champion, processedStats);
+
+      // 캐시 업데이트
+      statsCache.set(champion, {
+        data: processedStats,
+        timestamp: Date.now(),
+      });
+
+      // Firebase 업데이트
+      await tftStatsRef.doc(champion).set({
+        items: processedStats,
+        updatedAt: new Date(),
+      });
+    }
+
+    return results;
+  } catch (error) {
+    console.error("Error in collectChampionItemStats:", error);
+    throw error;
+  }
+}
+
+// 매치 데이터 처리
+function processMatchData(matchData, matchStats, specificChampions = null) {
+  // 1등만 필터링 (placement가 1인 참가자)
+  const winners = matchData.info.participants.filter((p) => p.placement === 1);
+
+  for (const participant of winners) {
+    for (const unit of participant.units) {
+      if (specificChampions && !specificChampions.includes(unit.character_id)) {
+        continue;
+      }
+
+      if (!matchStats.has(unit.character_id)) {
+        matchStats.set(unit.character_id, {
+          itemCombinations: new Map(),
+        });
+      }
+
+      const champStats = matchStats.get(unit.character_id);
+
+      // 아이템 조합 분석 - 3개 아이템 세트로 분석
+      const items = [...unit.items].sort(); // 정렬하여 동일한 조합이 항상 같은 키를 가지도록 함
+
+      // 조합 키 생성
+      if (items.length > 0) {
+        // 아이템이 3개 미만인 경우에도 처리
+        const combinationKey = items.join(",");
+
+        if (!champStats.itemCombinations.has(combinationKey)) {
+          champStats.itemCombinations.set(combinationKey, 0);
+        }
+
+        champStats.itemCombinations.set(
+          combinationKey,
+          champStats.itemCombinations.get(combinationKey) + 1,
+        );
+      }
+    }
+  }
+}
+
+// 아이템 조합 통계 처리 함수
+function processItemCombinations(combinationsMap) {
+  const totalCombinations = Array.from(combinationsMap.values()).reduce(
+    (a, b) => a + b,
+    0,
+  );
+
+  if (totalCombinations === 0) {
+    return [];
+  }
+
+  return Array.from(combinationsMap.entries())
+    .sort((a, b) => b[1] - a[1]) // 빈도순 정렬
+    .slice(0, 10) // 상위 10개 조합 선택
+    .map(([comboKey, count]) => {
+      const itemIds = comboKey.split(",").map((id) => parseInt(id));
+      return {
+        itemIds,
+        count,
+        frequency: ((count / totalCombinations) * 100).toFixed(1),
+        itemNames: itemIds.map((id) => itemMapping[id] || `아이템 ${id}`),
+      };
+    })
+    .slice(0, 3); // 최종적으로 상위 3개만 선택
+}
+
+// 추천 아이템 조회 함수 개선
+async function getRecommendedItems(championName) {
+  try {
+    const champion = championMapping[championName];
+    if (!champion) {
+      throw new Error("Champion not found");
+    }
+
+    let stats = await tftStatsRef.doc(champion).get();
+
+    if (
+      !stats.exists ||
+      Date.now() - stats.data().updatedAt.toDate() > CACHE_DURATION
+    ) {
+      // 데이터가 없거나 오래된 경우 새로 수집
+      const newStats = await collectChampionItemStats([champion]);
+      stats = newStats.get(champion);
+    } else {
+      stats = stats.data().items;
+    }
+
+    return {
+      champion: championName,
+      items: stats.map((item) => ({
+        combination: item.itemNames,
+        frequency: item.frequency,
+      })),
+    };
+  } catch (error) {
+    console.error(
+      `Error getting recommended items for ${championName}:`,
+      error,
+    );
+    throw error;
+  }
+}
+
+// TFT 아이템 조회 명령어 핸들러
+async function handleTftItemsCommand(interaction) {
+  try {
+    await interaction.deferReply();
+
+    const userInput = interaction.options.getString("챔피언");
+    const champion = championMapping[userInput];
+
+    if (!champion) {
+      const availableChampions = Object.keys(championMapping);
+      const similarChampions = availableChampions
+        .filter((name) => name.includes(userInput) || userInput.includes(name))
+        .slice(0, 3);
+
+      let errorMessage = `'${userInput}'은(는) 등록되지 않은 챔피언 이름입니다.\n`;
+      if (similarChampions.length > 0) {
+        errorMessage += `혹시 이 챔피언을 찾으시나요? ${similarChampions.join(", ")}`;
+      } else {
+        errorMessage += `챔피언 이름을 정확히 입력해주세요.`;
+      }
+
+      await interaction.editReply(errorMessage);
+      return;
+    }
+
+    let statsDoc = await tftStatsRef.doc(champion).get();
+
+    if (!statsDoc.exists) {
+      await interaction.editReply(
+        `${userInput}의 통계 데이터를 수집 중입니다. 잠시만 기다려주세요...`,
+      );
+      try {
+        await collectChampionItemStats([champion]);
+        statsDoc = await tftStatsRef.doc(champion).get();
+      } catch (error) {
+        console.error("TFT 통계 수집 중 에러:", error);
+        if (error.response?.status === 403) {
+          await interaction.editReply(
+            "Riot API 키가 만료되었습니다. 관리자에게 문의해주세요.",
+          );
+        } else if (error.response?.status === 429) {
+          await interaction.editReply(
+            "너무 많은 요청이 있었습니다. 잠시 후 다시 시도해주세요.",
+          );
+        } else {
+          await interaction.editReply(
+            `${userInput}의 통계 데이터 수집 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.`,
+          );
+        }
+        return;
+      }
+    }
+
+    if (!statsDoc.exists) {
+      await interaction.editReply(
+        `${userInput}의 통계 데이터 수집에 실패했습니다. 잠시 후 다시 시도해주세요.`,
+      );
+      return;
+    }
+
+    const stats = statsDoc.data();
+    const embed = new EmbedBuilder()
+      .setColor("#0099ff")
+      .setTitle(`${userInput} 추천 아이템 조합`)
+      .setDescription("그랜드마스터 이상 1등 플레이 데이터 기반")
+      .addFields(
+        stats.items.map((item, index) => ({
+          name: `${index + 1}순위 아이템 조합`,
+          value: `${item.itemNames.join(" + ")}\n채택률: ${item.frequency}%`,
+          inline: true,
+        })),
+      )
+      .setFooter({ text: "6시간마다 업데이트됩니다." })
+      .setTimestamp(stats.updatedAt.toDate());
+
+    await interaction.editReply({ embeds: [embed] });
+  } catch (error) {
+    console.error("TFT 아이템 조회 중 에러:", error);
+    await interaction.editReply(
+      "아이템 정보를 조회하는 중 오류가 발생했습니다.",
+    );
+  }
+}
+
 // 운세 생성 함수
 function generateFortune(userId) {
   // 기존 한국 시간 가져오기 사용
+  // 매번 새롭게 날짜 계산
   const koreanNow = getCurrentKoreanDate();
   const today = koreanNow.toISOString().slice(0, 10).replace(/-/g, "");
+
+  console.log("오늘 날짜 (재계산됨):", today);
 
   // 더 복잡한 시드 생성
   let seed = 0;
@@ -879,6 +1455,9 @@ client.on("interactionCreate", async (interaction) => {
 
     // 슬래시 커맨드 처리
     if (interaction.isCommand()) {
+      if (interaction.commandName === "tft아이템") {
+        await handleTftItemsCommand(interaction);
+      }
       if (interaction.commandName === "맛집추천") {
         try {
           await interaction.deferReply();
@@ -965,6 +1544,29 @@ ${interaction.member.displayName}님께서 0.2%의 확률을 뚫고
           } catch (error) {
             console.error("축하 메시지 전송 실패:", error);
           }
+        } else if (fortune.grade.grade === "존망") {
+          // 존망 등급 전용 특수 효과
+          content = `@everyone\n
+☠️ 비 극 적 인 · 순 간 ☠️
+⠀
+💀💀💀  존 망 등 급  💀💀💀
+⠀
+${interaction.member.displayName}님께서 0.2%의 확률로
+존망 등급의 저주를 받으셨습니다!
+⠀
+불운의 징조로 존망의 그림자가 드리웁니다...`;
+
+          // 특수 효과 메시지들
+          specialEffects = [
+            "```diff\n- 심연이 울부짖기 시작합니다...```",
+            "```fix\n☠ 존망의 기운이 스며듭니다... ☠```",
+            "```yaml\n운명의 실이 끊어지기 시작합니다...```",
+            "```css\n[ 불멸의 문이 닫힙니다... ]```",
+            `${interaction.member.displayName}님의 운명이 뒤틀립니다...`,
+          ];
+
+          // 임베드 색상을 어두운 색으로
+          embed.setColor("#000000"); // 검은색
         }
 
         // 먼저 운세 결과 전송
@@ -1012,6 +1614,47 @@ ${interaction.member.displayName}님께서 0.2%의 확률을 뚫고
 
           await interaction.channel.send(`\`\`\`css
 [행복한 하루 되세요!]
+\`\`\``);
+        }
+
+        // 존망 등급일 경우 특수 효과 순차 전송
+        if (fortune.grade.grade === "존망") {
+          for (const effect of specialEffects) {
+            await new Promise((resolve) => setTimeout(resolve, 1500)); // 1.5초 간격
+            await interaction.channel.send(effect);
+          }
+
+          // 마지막 대형 효과
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          // 존망 메시지를 여러 가지 코드 블록 스타일로 표현
+          await interaction.channel.send(`\`\`\`fix
+☠️ ⋆ ˚｡⋆୨୧˚ 존 망 의 저 주 ˚୨୧⋆｡˚ ⋆ ☠️
+\`\`\``);
+
+          await new Promise((resolve) => setTimeout(resolve, 800));
+
+          await interaction.channel.send(`\`\`\`diff
+- ₊⊹⭒══════════════════════════⭒⊹₊
+-    심연의 저주가 깃듭니다...
+- ₊⊹⭒══════════════════════════⭒⊹₊
+\`\`\``);
+
+          await new Promise((resolve) => setTimeout(resolve, 800));
+
+          await interaction.channel.send(`\`\`\`yaml
+이 불길한 조짐은 천년에 한번 올까말까한 파멸의 징조입니다!
+\`\`\``);
+
+          await new Promise((resolve) => setTimeout(resolve, 800));
+
+          await interaction.channel.send(`\`\`\`css
+[당신의 오늘은 역사에 기록될 불운으로 남을 것입니다...]
+\`\`\``);
+
+          await new Promise((resolve) => setTimeout(resolve, 800));
+
+          await interaction.channel.send(`\`\`\`css
+[모든 선택에 신중하세요... 운명이 당신을 주시합니다...]
 \`\`\``);
         }
       }

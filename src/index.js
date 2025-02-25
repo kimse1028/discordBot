@@ -30,12 +30,26 @@ async function getFifaOUID(nickname) {
     const response = await axios.get(
       `https://open.api.nexon.com/fconline/v1/id?nickname=${encodedNickname}`,
       {
-        headers: { Authorization: process.env.FCONLINE_API_KEY },
+        headers: { "x-nxopen-api-key": process.env.FCONLINE_API_KEY },
       },
     );
-    return response.data; // OUID 반환
+    console.log("OUID 응답 데이터:", JSON.stringify(response.data));
+
+    // 객체에서 ouid 속성 추출하여 반환
+    if (response.data && response.data.ouid) {
+      return response.data.ouid;
+    } else {
+      console.error("OUID를 찾을 수 없음:", response.data);
+      return null;
+    }
   } catch (error) {
     console.error("피파 OUID 조회 중 에러:", error.message);
+    if (error.response && error.response.data) {
+      console.error(
+        "응답 에러 상세 정보:",
+        JSON.stringify(error.response.data),
+      );
+    }
     throw error;
   }
 }
@@ -43,15 +57,23 @@ async function getFifaOUID(nickname) {
 // 기본 유저 정보 조회
 async function getFifaUserInfo(ouid) {
   try {
+    console.log(`유저 정보 API 호출 (OUID: ${ouid})`);
     const response = await axios.get(
       `https://open.api.nexon.com/fconline/v1/user/basic?ouid=${ouid}`,
       {
-        headers: { Authorization: process.env.FCONLINE_API_KEY },
+        headers: { "x-nxopen-api-key": process.env.FCONLINE_API_KEY },
       },
     );
+    console.log("유저 정보 응답 데이터:", JSON.stringify(response.data));
     return response.data;
   } catch (error) {
     console.error("피파 유저 정보 조회 중 에러:", error.message);
+    if (error.response && error.response.data) {
+      console.error(
+        "응답 에러 상세 정보:",
+        JSON.stringify(error.response.data),
+      );
+    }
     throw error;
   }
 }
@@ -59,22 +81,29 @@ async function getFifaUserInfo(ouid) {
 // 최고 등급 정보 조회
 async function getFifaMaxDivision(ouid) {
   try {
+    console.log(`최고 등급 API 호출 (OUID: ${ouid})`);
     const response = await axios.get(
       `https://open.api.nexon.com/fconline/v1/user/maxdivision?ouid=${ouid}`,
       {
-        headers: { Authorization: process.env.FCONLINE_API_KEY },
+        headers: { "x-nxopen-api-key": process.env.FCONLINE_API_KEY },
       },
     );
+    console.log("최고 등급 응답 데이터:", JSON.stringify(response.data));
     return response.data;
   } catch (error) {
     console.error("피파 최고 등급 정보 조회 중 에러:", error.message);
+    if (error.response && error.response.data) {
+      console.error(
+        "응답 에러 상세 정보:",
+        JSON.stringify(error.response.data),
+      );
+    }
     throw error;
   }
 }
 
 // 디비전(티어) 이름 반환 함수
 function getDivisionName(division) {
-  // 디비전 코드에 따른 이름 매핑
   const divisionNames = {
     800: "슈퍼챔피언스",
     900: "챔피언스",
@@ -96,7 +125,7 @@ function getDivisionName(division) {
     3100: "아마추어3",
   };
 
-  return divisionNames[division] || "알 수 없음";
+  return divisionNames[division] || `알 수 없음(${division})`;
 }
 
 // 매치 타입 이름 반환 함수
@@ -108,7 +137,7 @@ function getMatchTypeName(matchType) {
     60: "볼타모드",
   };
 
-  return matchTypeNames[matchType] || "기타";
+  return matchTypeNames[matchType] || `기타(${matchType})`;
 }
 
 // Riot API 관련 상수
@@ -1248,9 +1277,12 @@ async function handleFifaCommand(interaction) {
     await interaction.deferReply();
 
     const nickname = interaction.options.getString("닉네임");
+    console.log(`닉네임 "${nickname}"에 대한 정보 조회 시작...`);
 
-    // OUID 조회
+    // OUID 조회 (이제 직접 ouid 문자열 반환)
     const ouid = await getFifaOUID(nickname);
+    console.log(`OUID 조회 결과: ${ouid} (타입: ${typeof ouid})`);
+
     if (!ouid) {
       return await interaction.editReply(
         `'${nickname}' 사용자를 찾을 수 없습니다.`,
@@ -1259,39 +1291,54 @@ async function handleFifaCommand(interaction) {
 
     // 기본 정보 조회
     const userInfo = await getFifaUserInfo(ouid);
+    console.log("사용자 기본 정보:", JSON.stringify(userInfo));
 
     // 최고 등급 정보 조회
     const maxDivisions = await getFifaMaxDivision(ouid);
+    console.log("최고 등급 정보:", JSON.stringify(maxDivisions));
 
     // Embed 생성
     const embed = new EmbedBuilder()
       .setColor("#0099ff")
-      .setTitle(`🎮 ${userInfo.nickname}님의 피파 온라인 정보`)
-      .setDescription(`레벨: ${userInfo.level}`)
+      .setTitle(`🎮 ${userInfo.nickname || nickname}님의 피파 온라인 정보`)
+      .setDescription(`레벨: ${userInfo.level || "정보 없음"}`)
       .setThumbnail(
         "https://ssl.nexon.com/s2/game/fo4/shop/playerkits/230/p230147.png",
-      ) // 피파 관련 이미지 (변경 가능)
+      )
+      .setFooter({ text: "데이터 제공: NEXON OPEN API" })
       .setTimestamp();
 
     // 최고 등급 정보 추가
     if (maxDivisions && maxDivisions.length > 0) {
       maxDivisions.forEach((division) => {
-        const matchName = getMatchTypeName(division.matchType);
-        const divisionName = getDivisionName(division.division);
-        const achievementDate = new Date(division.achievementDate);
+        try {
+          const matchName = getMatchTypeName(division.matchType);
+          const divisionName = getDivisionName(division.division);
 
-        // 날짜 포매팅
-        const formattedDate = new Intl.DateTimeFormat("ko-KR", {
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-        }).format(achievementDate);
+          // 달성일 포매팅
+          let formattedDate = "정보 없음";
+          if (division.achievementDate) {
+            const achievementDate = new Date(division.achievementDate);
+            formattedDate = new Intl.DateTimeFormat("ko-KR", {
+              year: "numeric",
+              month: "2-digit",
+              day: "2-digit",
+            }).format(achievementDate);
+          }
 
-        embed.addFields({
-          name: `${matchName} 최고 등급`,
-          value: `${divisionName} (달성일: ${formattedDate})`,
-          inline: true,
-        });
+          embed.addFields({
+            name: `${matchName} 최고 등급`,
+            value: `${divisionName} (달성일: ${formattedDate})`,
+            inline: true,
+          });
+        } catch (err) {
+          console.error("등급 정보 처리 중 오류:", err);
+          embed.addFields({
+            name: "등급 정보 오류",
+            value: "등급 정보를 처리하는 중 오류가 발생했습니다.",
+            inline: true,
+          });
+        }
       });
     } else {
       embed.addFields({
@@ -1300,12 +1347,6 @@ async function handleFifaCommand(interaction) {
         inline: true,
       });
     }
-
-    embed.addFields({
-      name: "플레이어 ID",
-      value: `\`${ouid}\``,
-      inline: false,
-    });
 
     await interaction.editReply({ embeds: [embed] });
   } catch (error) {
@@ -1323,10 +1364,15 @@ async function handleFifaCommand(interaction) {
         error.response.status === 403
       ) {
         errorMessage = "API 키가 유효하지 않습니다. 관리자에게 문의하세요.";
+      } else if (error.response.status === 400) {
+        errorMessage = "잘못된 요청입니다. 닉네임을 정확히 입력해주세요.";
+        if (error.response.data) {
+          errorMessage += `\n상세 오류: ${JSON.stringify(error.response.data)}`;
+        }
       }
     }
 
-    await interaction.editReply(errorMessage);
+    await interaction.editReply(`⚠️ ${errorMessage}`);
   }
 }
 

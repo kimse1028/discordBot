@@ -24,10 +24,109 @@ const RIOT_API_KEY = process.env.RIOT_API_KEY;
 const TFT_API_BASE = "https://kr.api.riotgames.com/tft";
 const LEAGUE_API_BASE = `${TFT_API_BASE}/league/v1`;
 const MATCH_API_BASE = `${TFT_API_BASE}/match/v1`;
+// Riot API 관련 추가 상수
+const GRANDMASTER_API_PATH = `${LEAGUE_API_BASE}/grandmaster`;
 
 // Riot API 관련 상수 아래에 추가
 const CACHE_DURATION = 6 * 60 * 60 * 1000; // 6시간
 const statsCache = new Map();
+
+// API 요청 관리를 위한 Rate Limiter 클래스
+class RiotRateLimiter {
+  constructor() {
+    // 메소드별 Rate Limit 추적
+    this.methodLimits = {
+      "tft/league/v1": {
+        count: 0,
+        lastReset: Date.now(),
+        limit: 50,
+        interval: 60000,
+      },
+      "tft/match/v1": {
+        count: 0,
+        lastReset: Date.now(),
+        limit: 100,
+        interval: 120000,
+      },
+      "tft/summoner/v1": {
+        count: 0,
+        lastReset: Date.now(),
+        limit: 20,
+        interval: 60000,
+      },
+      default: { count: 0, lastReset: Date.now(), limit: 20, interval: 60000 },
+    };
+
+    // 전역 App Rate Limit
+    this.appLimit = {
+      count: 0,
+      lastReset: Date.now(),
+      limit: 100,
+      interval: 120000,
+    };
+
+    // 주기적으로 카운터 리셋
+    setInterval(() => this.resetCounters(), 60000);
+  }
+
+  resetCounters() {
+    const now = Date.now();
+
+    // 각 메소드별 카운터 리셋
+    for (const method in this.methodLimits) {
+      const limit = this.methodLimits[method];
+      if (now - limit.lastReset >= limit.interval) {
+        limit.count = 0;
+        limit.lastReset = now;
+      }
+    }
+
+    // 앱 전체 카운터 리셋
+    if (now - this.appLimit.lastReset >= this.appLimit.interval) {
+      this.appLimit.count = 0;
+      this.appLimit.lastReset = now;
+    }
+  }
+
+  async checkAndWait(methodPath) {
+    // API 메소드 경로에서 기본 경로 추출 (예: tft/match/v1)
+    const baseMethod = methodPath.split("/").slice(0, 3).join("/") || "default";
+    const methodLimit =
+      this.methodLimits[baseMethod] || this.methodLimits.default;
+
+    // 메소드별 Rate Limit 체크
+    if (methodLimit.count >= methodLimit.limit) {
+      const waitTime =
+        methodLimit.interval - (Date.now() - methodLimit.lastReset);
+      if (waitTime > 0) {
+        console.log(
+          `Method Rate Limit reached for ${baseMethod}, waiting ${waitTime}ms`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+        return this.checkAndWait(methodPath); // 재귀적으로 다시 확인
+      }
+      methodLimit.count = 0;
+      methodLimit.lastReset = Date.now();
+    }
+
+    // 앱 전체 Rate Limit 체크
+    if (this.appLimit.count >= this.appLimit.limit) {
+      const waitTime =
+        this.appLimit.interval - (Date.now() - this.appLimit.lastReset);
+      if (waitTime > 0) {
+        console.log(`App Rate Limit reached, waiting ${waitTime}ms`);
+        await new Promise((resolve) => setTimeout(resolve, waitTime));
+        return this.checkAndWait(methodPath); // 재귀적으로 다시 확인
+      }
+      this.appLimit.count = 0;
+      this.appLimit.lastReset = Date.now();
+    }
+
+    // 카운터 증가
+    methodLimit.count++;
+    this.appLimit.count++;
+  }
+}
 
 // Riot API 요청 유틸리티 함수
 async function makeRiotRequest(url) {
@@ -684,30 +783,48 @@ function createRestaurantEmbed(restaurant, location) {
 
 // puuid 조회
 async function getPuuid(summonerId) {
-  const data = await makeRiotRequest(
-    `https://kr.api.riotgames.com/tft/summoner/v1/summoners/${summonerId}`,
-  );
-  return data.puuid;
+  try {
+    const data = await makeRiotRequest(
+      `https://kr.api.riotgames.com/tft/summoner/v1/summoners/${summonerId}`,
+    );
+    return data.puuid;
+  } catch (error) {
+    console.error(`getPuuid 에러 (summonerId: ${summonerId}):`, error.message);
+    throw error;
+  }
 }
 
 // 최근 매치 목록 조회
 async function getRecentMatches(puuid) {
-  const data = await makeRiotRequest(
-    `${MATCH_API_BASE}/matches/by-puuid/${puuid}/ids?count=5`,
-  );
-  return data;
+  try {
+    const data = await makeRiotRequest(
+      `${MATCH_API_BASE}/matches/by-puuid/${puuid}/ids?count=3`,
+    );
+    return data;
+  } catch (error) {
+    console.error(
+      `getRecentMatches 에러 (puuid: ${puuid.substring(0, 8)}...):`,
+      error.message,
+    );
+    throw error;
+  }
 }
 
 // 매치 상세 정보 조회
 async function getMatchDetails(matchId) {
-  const data = await makeRiotRequest(`${MATCH_API_BASE}/matches/${matchId}`);
-  return data;
+  try {
+    const data = await makeRiotRequest(`${MATCH_API_BASE}/matches/${matchId}`);
+    return data;
+  } catch (error) {
+    console.error(`getMatchDetails 에러 (matchId: ${matchId}):`, error.message);
+    throw error;
+  }
 }
 
 // 챔피언별 아이템 통계 수집 함수
 async function collectChampionItemStats(specificChampions = null) {
   try {
-    // 캐시 체크
+    // 캐시 체크는 기존과 동일
     if (specificChampions?.length === 1) {
       const champion = specificChampions[0];
       const cachedStats = statsCache.get(champion);
@@ -716,39 +833,69 @@ async function collectChampionItemStats(specificChampions = null) {
       }
     }
 
-    // 챌린저 티어 플레이어 데이터 수집
+    // 순차적으로 처리
+    console.log("챌린저 티어 데이터 수집 중...");
     const challengerPlayers = await makeRiotRequest(
       `${LEAGUE_API_BASE}/challenger`,
     );
 
-    // 병렬 처리를 위한 배치 크기 설정
-    const BATCH_SIZE = 5;
+    console.log("그랜드마스터 티어 데이터 수집 중...");
+    const grandmasterPlayers = await makeRiotRequest(
+      `${LEAGUE_API_BASE}/grandmaster`,
+    );
+
+    // 두 티어의 플레이어를 합침
+    const highTierPlayers = [
+      ...challengerPlayers.entries,
+      ...grandmasterPlayers.entries,
+    ];
+
+    // 배치 사이즈를 더 작게 조정하여 요청 부하 감소
+    const BATCH_SIZE = 3;
     const matchStats = new Map();
 
-    // 플레이어 배치 처리
+    // 플레이어 수 제한 (더 적은 수로 제한)
+    const maxPlayers = 30;
+
+    console.log(`최대 ${maxPlayers}명의 플레이어 데이터를 처리합니다...`);
+
+    // 플레이어 순차 처리 (완전 병렬이 아닌 배치별 순차 처리)
     for (
       let i = 0;
-      i < Math.min(challengerPlayers.entries.length, 20);
+      i < Math.min(highTierPlayers.length, maxPlayers);
       i += BATCH_SIZE
     ) {
-      const batch = challengerPlayers.entries.slice(i, i + BATCH_SIZE);
+      const batch = highTierPlayers.slice(i, i + BATCH_SIZE);
+      console.log(
+        `플레이어 배치 처리 중: ${i + 1}~${Math.min(i + BATCH_SIZE, maxPlayers)}/${maxPlayers}`,
+      );
+
+      // 각 배치 내에서는 병렬 처리
       await Promise.all(
         batch.map(async (player) => {
           try {
             const puuid = await getPuuid(player.summonerId);
-            const matches = await getRecentMatches(puuid);
 
-            // 매치 데이터 병렬 처리
-            await Promise.all(
-              matches.map(async (matchId) => {
-                try {
-                  const matchData = await getMatchDetails(matchId);
-                  processMatchData(matchData, matchStats, specificChampions);
-                } catch (error) {
-                  console.error(`Error processing match ${matchId}:`, error);
-                }
-              }),
+            // 매치 수를 제한 (5에서 3으로 줄임)
+            const matches = await getRecentMatches(puuid);
+            const limitedMatches = matches.slice(0, 3);
+
+            console.log(
+              `플레이어 ${player.summonerName || player.summonerId}의 ${limitedMatches.length}개 매치 처리 중...`,
             );
+
+            // 매치 순차 처리 (병렬 대신)
+            for (const matchId of limitedMatches) {
+              try {
+                const matchData = await getMatchDetails(matchId);
+                processMatchData(matchData, matchStats, specificChampions);
+
+                // 매치 요청 사이에 딜레이 추가
+                await new Promise((resolve) => setTimeout(resolve, 100));
+              } catch (error) {
+                console.error(`Error processing match ${matchId}:`, error);
+              }
+            }
           } catch (error) {
             console.error(
               `Error processing player ${player.summonerId}:`,
@@ -757,12 +904,15 @@ async function collectChampionItemStats(specificChampions = null) {
           }
         }),
       );
+
+      // 배치 처리 사이에 딜레이 추가
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
 
-    // 결과 처리 및 캐싱
+    // 결과 처리 및 캐싱 (기존과 동일)
     const results = new Map();
     for (const [champion, stats] of matchStats.entries()) {
-      const processedStats = processItemStats(stats.items);
+      const processedStats = processItemCombinations(stats.itemCombinations);
       results.set(champion, processedStats);
 
       // 캐시 업데이트
@@ -787,47 +937,71 @@ async function collectChampionItemStats(specificChampions = null) {
 
 // 매치 데이터 처리
 function processMatchData(matchData, matchStats, specificChampions = null) {
-  const TOP_PLACEMENT_THRESHOLD = 4;
+  // 1등만 필터링 (placement가 1인 참가자)
+  const winners = matchData.info.participants.filter((p) => p.placement === 1);
 
-  for (const participant of matchData.info.participants) {
-    if (participant.placement <= TOP_PLACEMENT_THRESHOLD) {
-      for (const unit of participant.units) {
-        if (
-          specificChampions &&
-          !specificChampions.includes(unit.character_id)
-        ) {
-          continue;
+  for (const participant of winners) {
+    for (const unit of participant.units) {
+      if (specificChampions && !specificChampions.includes(unit.character_id)) {
+        continue;
+      }
+
+      if (!matchStats.has(unit.character_id)) {
+        matchStats.set(unit.character_id, {
+          itemCombinations: new Map(),
+        });
+      }
+
+      const champStats = matchStats.get(unit.character_id);
+
+      // 아이템 조합 분석 - 3개 아이템 세트로 분석
+      const items = [...unit.items].sort(); // 정렬하여 동일한 조합이 항상 같은 키를 가지도록 함
+
+      // 조합 키 생성
+      if (items.length > 0) {
+        // 아이템이 3개 미만인 경우에도 처리
+        const combinationKey = items.join(",");
+
+        if (!champStats.itemCombinations.has(combinationKey)) {
+          champStats.itemCombinations.set(combinationKey, 0);
         }
 
-        if (!matchStats.has(unit.character_id)) {
-          matchStats.set(unit.character_id, { items: new Map() });
-        }
-
-        const champStats = matchStats.get(unit.character_id);
-
-        // 아이템 조합 분석
-        for (const itemId of unit.items) {
-          champStats.items.set(itemId, (champStats.items.get(itemId) || 0) + 1);
-        }
+        champStats.itemCombinations.set(
+          combinationKey,
+          champStats.itemCombinations.get(combinationKey) + 1,
+        );
       }
     }
   }
 }
 
-// 아이템 통계 처리
-function processItemStats(itemsMap) {
-  const totalItems = Array.from(itemsMap.values()).reduce((a, b) => a + b, 0);
+// 아이템 조합 통계 처리 함수
+function processItemCombinations(combinationsMap) {
+  const totalCombinations = Array.from(combinationsMap.values()).reduce(
+    (a, b) => a + b,
+    0,
+  );
 
-  return Array.from(itemsMap.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([itemId, count]) => ({
-      itemId,
-      count,
-      frequency: ((count / totalItems) * 100).toFixed(1),
-    }));
+  if (totalCombinations === 0) {
+    return [];
+  }
+
+  return Array.from(combinationsMap.entries())
+    .sort((a, b) => b[1] - a[1]) // 빈도순 정렬
+    .slice(0, 10) // 상위 10개 조합 선택
+    .map(([comboKey, count]) => {
+      const itemIds = comboKey.split(",").map((id) => parseInt(id));
+      return {
+        itemIds,
+        count,
+        frequency: ((count / totalCombinations) * 100).toFixed(1),
+        itemNames: itemIds.map((id) => itemMapping[id] || `아이템 ${id}`),
+      };
+    })
+    .slice(0, 3); // 최종적으로 상위 3개만 선택
 }
 
+// 추천 아이템 조회 함수 개선
 async function getRecommendedItems(championName) {
   try {
     const champion = championMapping[championName];
@@ -851,7 +1025,7 @@ async function getRecommendedItems(championName) {
     return {
       champion: championName,
       items: stats.map((item) => ({
-        name: itemMapping[item.itemId],
+        combination: item.itemNames,
         frequency: item.frequency,
       })),
     };
@@ -927,12 +1101,12 @@ async function handleTftItemsCommand(interaction) {
     const stats = statsDoc.data();
     const embed = new EmbedBuilder()
       .setColor("#0099ff")
-      .setTitle(`${userInput} 추천 아이템`)
-      .setDescription("마스터 티어 이상 유저들의 선호 아이템입니다.")
+      .setTitle(`${userInput} 추천 아이템 조합`)
+      .setDescription("그랜드마스터 이상 1등 플레이 데이터 기반")
       .addFields(
         stats.items.map((item, index) => ({
-          name: `${index + 1}순위 아이템`,
-          value: `${itemMapping[item.itemId] || `아이템 ${item.itemId}`}\n채택률: ${((item.count / stats.items[0].count) * 100).toFixed(1)}%`,
+          name: `${index + 1}순위 아이템 조합`,
+          value: `${item.itemNames.join(" + ")}\n채택률: ${item.frequency}%`,
           inline: true,
         })),
       )

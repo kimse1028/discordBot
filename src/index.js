@@ -19,6 +19,9 @@ const {
 } = require("discord.js");
 const dotenv = require("dotenv");
 
+// 축구 검색 API
+const FOOTBALL_API_KEY = process.env.FOOTBALL_API_KEY;
+
 // 피파 API 관련 상수
 const FCONLINE_API_KEY = process.env.FCONLINE_API_KEY;
 
@@ -295,6 +298,9 @@ const championMapping = JSON.parse(
 );
 const itemMapping = JSON.parse(
   fs.readFileSync(path.join(__dirname, "./data/tftItems.json"), "utf8"),
+);
+const teamMapping = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "./data/teamMapping.json"), "utf8"),
 );
 
 // TFT 아이템 커맨드에서 사용할 자동완성 선택지 생성
@@ -646,6 +652,17 @@ const client = new Client({
 // 슬래시 커맨드 정의
 const commands = [
   new SlashCommandBuilder()
+    .setName("축구")
+    .setDescription("축구 팀 정보를 조회합니다")
+    .addStringOption(
+      (option) =>
+        option
+          .setName("팀명")
+          .setDescription("조회할 축구팀 이름을 입력하세요")
+          .setRequired(true)
+          .setAutocomplete(true), // 자동완성 활성화
+    ),
+  new SlashCommandBuilder()
     .setName("피파")
     .setDescription("피파 온라인 사용자 정보를 조회합니다")
     .addStringOption((option) =>
@@ -809,6 +826,452 @@ function setLongTimeout(callback, delay) {
   } else {
     return setTimeout(callback, delay);
   }
+}
+
+// 팀 검색 함수
+async function searchFootballTeam(teamName) {
+  try {
+    console.log(`팀 '${teamName}' 검색 시작`);
+
+    // 입력값 전처리 (소문자 변환, 앞뒤 공백 제거)
+    const processedName = teamName.trim().toLowerCase();
+
+    // 1. 매핑 테이블에서 먼저 검색
+    if (teamMapping[processedName] || teamMapping[teamName]) {
+      const teamId = teamMapping[processedName] || teamMapping[teamName];
+      console.log(`매핑 테이블에서 팀 ID 찾음: ${teamId}`);
+
+      const response = await axios.get(
+        `https://api.football-data.org/v4/teams/${teamId}`,
+        {
+          headers: { "X-Auth-Token": FOOTBALL_API_KEY },
+        },
+      );
+
+      return response.data;
+    }
+
+    // 2. API로 팀 직접 검색 시도
+    console.log(`매핑 테이블에서 팀을 찾지 못함, 모든 팀 로드 시도 중...`);
+
+    // 개선: 주요 리그별로 팀 데이터 로드 (한 번에 모든 팀 로드)
+    const leagueCodes = ["PL", "PD", "BL1", "SA", "FL1", "DED"]; // 주요 리그
+    let allTeams = [];
+
+    // API 요청 제한을 고려하여 주요 리그만 검색 (필요에 따라 조정)
+    for (const code of leagueCodes) {
+      try {
+        console.log(`${code} 리그 팀 로드 중...`);
+        const leagueResponse = await axios.get(
+          `https://api.football-data.org/v4/competitions/${code}/teams`,
+          {
+            headers: { "X-Auth-Token": FOOTBALL_API_KEY },
+          },
+        );
+
+        if (leagueResponse.data.teams) {
+          allTeams = [...allTeams, ...leagueResponse.data.teams];
+        }
+      } catch (error) {
+        console.error(`${code} 리그 팀 로드 실패:`, error.message);
+        // 오류가 발생해도 계속 진행
+      }
+    }
+
+    console.log(`총 ${allTeams.length}개 팀 로드 완료`);
+
+    // 3. 팀 이름 유사도 검색
+    if (allTeams.length > 0) {
+      // 정확한 이름 일치 검색
+      let foundTeam = allTeams.find(
+        (team) =>
+          team.name.toLowerCase() === processedName ||
+          team.shortName?.toLowerCase() === processedName ||
+          team.tla?.toLowerCase() === processedName,
+      );
+
+      // 정확한 일치가 없으면 부분 일치 검색
+      if (!foundTeam) {
+        foundTeam = allTeams.find(
+          (team) =>
+            team.name.toLowerCase().includes(processedName) ||
+            processedName.includes(team.name.toLowerCase()) ||
+            (team.shortName &&
+              team.shortName.toLowerCase().includes(processedName)) ||
+            (team.tla && processedName.includes(team.tla.toLowerCase())),
+        );
+      }
+
+      if (foundTeam) {
+        console.log(`팀 찾음: ${foundTeam.name} (ID: ${foundTeam.id})`);
+        return foundTeam;
+      }
+    }
+
+    console.log(`'${teamName}' 팀을 찾을 수 없음`);
+    return null;
+  } catch (error) {
+    console.error("축구 팀 검색 중 에러:", error.message);
+
+    if (error.response) {
+      console.error(`API 응답 에러: ${error.response.status}`);
+      console.error(`에러 상세 정보:`, error.response.data);
+    }
+
+    throw error;
+  }
+}
+
+// 팀 상세 정보 조회
+async function getTeamDetails(teamId) {
+  try {
+    const response = await axios.get(
+      `https://api.football-data.org/v4/teams/${teamId}`,
+      {
+        headers: { "X-Auth-Token": FOOTBALL_API_KEY },
+      },
+    );
+
+    return response.data;
+  } catch (error) {
+    console.error(`팀 상세 정보 조회 중 에러(ID: ${teamId}):`, error.message);
+    throw error;
+  }
+}
+
+// 팀 일정 조회
+async function getTeamMatches(teamId) {
+  try {
+    const response = await axios.get(
+      `https://api.football-data.org/v4/teams/${teamId}/matches`,
+      {
+        headers: { "X-Auth-Token": FOOTBALL_API_KEY },
+        params: { limit: 5, status: "SCHEDULED" },
+      },
+    );
+
+    return response.data.matches;
+  } catch (error) {
+    console.error(`팀 일정 조회 중 에러(ID: ${teamId}):`, error.message);
+    throw error;
+  }
+}
+
+// 팀 순위 정보 조회 함수
+async function getTeamStanding(teamId) {
+  try {
+    // 1. 팀 정보에서 주요 리그 ID 찾기
+    const teamDetails = await getTeamDetails(teamId);
+    if (
+      !teamDetails.runningCompetitions ||
+      teamDetails.runningCompetitions.length === 0
+    ) {
+      return null;
+    }
+
+    // 일반적으로 첫 번째 대회가 주요 리그일 가능성이 높음
+    const mainCompetition = teamDetails.runningCompetitions[0];
+
+    // 2. 해당 리그의 순위표 조회
+    const response = await axios.get(
+      `https://api.football-data.org/v4/competitions/${mainCompetition.code}/standings`,
+      {
+        headers: { "X-Auth-Token": FOOTBALL_API_KEY },
+      },
+    );
+
+    if (!response.data.standings || response.data.standings.length === 0) {
+      return null;
+    }
+
+    // 3. 팀의 순위 정보 찾기 (일반적으로 TOTAL 타입의 순위표 사용)
+    const regularStanding = response.data.standings.find(
+      (s) => s.type === "TOTAL",
+    );
+    if (!regularStanding || !regularStanding.table) {
+      return null;
+    }
+
+    // 4. 해당 팀의 순위 찾기
+    const teamStanding = regularStanding.table.find(
+      (t) => t.team.id === teamId,
+    );
+    if (!teamStanding) {
+      return null;
+    }
+
+    // 5. 팀 순위 및 전체 팀 수 반환
+    return {
+      position: teamStanding.position,
+      totalTeams: regularStanding.table.length,
+      stats: {
+        playedGames: teamStanding.playedGames,
+        won: teamStanding.won,
+        draw: teamStanding.draw,
+        lost: teamStanding.lost,
+        points: teamStanding.points,
+        goalsFor: teamStanding.goalsFor,
+        goalsAgainst: teamStanding.goalsAgainst,
+      },
+      competition: mainCompetition,
+    };
+  } catch (error) {
+    console.error(`팀 순위 정보 조회 중 에러(ID: ${teamId}):`, error.message);
+    return null;
+  }
+}
+
+// 축구 정보 조회 핸들러
+async function handleFootballCommand(interaction) {
+  try {
+    await interaction.deferReply();
+
+    const teamName = interaction.options.getString("팀명");
+    console.log(`팀명 "${teamName}"에 대한 정보 조회 시작...`);
+
+    // 팀 검색
+    const team = await searchFootballTeam(teamName);
+    if (!team) {
+      return await interaction.editReply(
+        `'${teamName}' 팀을 찾을 수 없습니다.`,
+      );
+    }
+
+    // 팀 상세 정보
+    const teamDetails = await getTeamDetails(team.id);
+
+    // 팀 일정
+    const upcomingMatches = await getTeamMatches(team.id);
+
+    // 팀 순위 정보
+    let standingInfo = null;
+    try {
+      standingInfo = await getTeamStanding(team.id);
+    } catch (error) {
+      console.error("순위 정보 조회 실패:", error);
+    }
+
+    // 임베드 생성
+    const embed = new EmbedBuilder()
+      .setColor("#0099ff")
+      .setTitle(`⚽ ${teamDetails.name}`)
+      .setDescription(
+        `**${teamDetails.area.name}**${teamDetails.founded ? ` | 창단: ${teamDetails.founded}년` : ""}`,
+      )
+      .setThumbnail(teamDetails.crest)
+      .addFields(
+        {
+          name: "🏟️ 홈 경기장",
+          value: teamDetails.venue || "정보 없음",
+          inline: true,
+        },
+        {
+          name: "🏆 참가 대회",
+          value:
+            teamDetails.runningCompetitions.map((c) => c.name).join(", ") ||
+            "정보 없음",
+          inline: true,
+        },
+      )
+      .addFields({
+        name: "🌐 정보",
+        value: `[공식 웹사이트](${teamDetails.website || "#"})${teamDetails.address ? ` | 주소: ${teamDetails.address}` : ""}`,
+      })
+      .setFooter({ text: "데이터 제공: football-data.org" })
+      .setTimestamp();
+
+    // 팀 성적 정보 추가
+    if (standingInfo) {
+      embed.addFields({
+        name: "📊 현재 순위",
+        value: `${standingInfo.position}위 / ${standingInfo.totalTeams}팀 중 (${standingInfo.competition.name})`,
+        inline: false,
+      });
+
+      // 성적 정보 추가
+      const stats = standingInfo.stats;
+      embed.addFields({
+        name: "📈 시즌 성적",
+        value: `${stats.won}승 ${stats.draw}무 ${stats.lost}패 | ${stats.points}점\n${stats.goalsFor}득점 ${stats.goalsAgainst}실점 | ${stats.playedGames}경기`,
+        inline: false,
+      });
+    }
+
+    // 다가오는 경기
+    if (upcomingMatches && upcomingMatches.length > 0) {
+      // 제목만 따로 추가
+      embed.addFields({
+        name: "📅 다가오는 경기 일정",
+        value: "\u200B", // 빈 문자를 넣어 구분선 효과
+      });
+
+      // 각 경기를 개별 필드로 추가
+      upcomingMatches.slice(0, 3).forEach((match, index) => {
+        const matchDate = new Date(match.utcDate);
+
+        // 요일 표시 추가
+        const days = ["일", "월", "화", "수", "목", "금", "토"];
+        const dayOfWeek = days[matchDate.getDay()];
+
+        // 날짜 형식 개선
+        const formattedDate = `${matchDate.getMonth() + 1}월 ${matchDate.getDate()}일 (${dayOfWeek})`;
+
+        // 시간 형식 개선
+        let hours = matchDate.getHours();
+        const minutes = matchDate.getMinutes().toString().padStart(2, "0");
+        const ampm = hours >= 12 ? "오후" : "오전";
+        hours = hours % 12;
+        hours = hours ? hours : 12; // 0시는 12시로 표시
+        const formattedTime = `${ampm} ${hours}:${minutes}`;
+
+        // 홈/원정 구분을 위한 이모지
+        const isHome = match.homeTeam.id === teamDetails.id;
+        const matchEmoji = isHome ? "🏠" : "🚌";
+
+        // 경기 정보 구성
+        let opponent = isHome ? match.awayTeam.name : match.homeTeam.name;
+        let matchInfo = isHome
+          ? `${teamDetails.shortName || teamDetails.name} vs ${opponent}`
+          : `${opponent} vs ${teamDetails.shortName || teamDetails.name}`;
+
+        // 대회 정보 추가
+        let competition = "";
+        if (match.competition) {
+          competition = `${match.competition.name}`;
+        }
+
+        embed.addFields({
+          name: `${matchEmoji} ${formattedDate} ${formattedTime}`,
+          value: `**${matchInfo}**\n${competition}`,
+          inline: false,
+        });
+      });
+
+      // 만약 더 많은 경기가 있다면 안내
+      if (upcomingMatches.length > 3) {
+        embed.addFields({
+          name: "\u200B",
+          value: `*이외 ${upcomingMatches.length - 3}개의 경기가 더 예정되어 있습니다.*`,
+        });
+      }
+    } else {
+      embed.addFields({
+        name: "📅 다가오는 경기 일정",
+        value: "예정된 경기가 없습니다.",
+      });
+    }
+
+    // 팀 성적 정보 추가
+    if (standingInfo) {
+      embed.addFields({
+        name: "📊 현재 순위",
+        value: `${standingInfo.position}위 / ${standingInfo.totalTeams}팀 중 (${standingInfo.competition.name})`,
+        inline: false,
+      });
+
+      // 성적 정보 추가
+      const stats = standingInfo.stats;
+      embed.addFields({
+        name: "📈 시즌 성적",
+        value: `${stats.won}승 ${stats.draw}무 ${stats.lost}패 | ${stats.points}점\n${stats.goalsFor}득점 ${stats.goalsAgainst}실점 | ${stats.playedGames}경기`,
+        inline: false,
+      });
+    }
+
+    await interaction.editReply({ embeds: [embed] });
+  } catch (error) {
+    console.error("축구 정보 조회 중 에러:", error);
+
+    let errorMessage = "정보를 조회하는 중 오류가 발생했습니다.";
+    if (error.response) {
+      if (error.response.status === 404) {
+        errorMessage = "존재하지 않는 팀입니다.";
+      } else if (error.response.status === 429) {
+        errorMessage =
+          "API 요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.";
+      } else if (
+        error.response.status === 401 ||
+        error.response.status === 403
+      ) {
+        errorMessage = "API 키가 유효하지 않습니다. 관리자에게 문의하세요.";
+      }
+    }
+
+    await interaction.editReply(`⚠️ ${errorMessage}`);
+  }
+}
+
+// 팀을 찾지 못했을 때 유사한 팀 찾기
+function findSimilarTeams(teamName) {
+  const input = teamName.toLowerCase();
+  let similarTeams = [];
+
+  // 1. 포함 관계 검색
+  for (const [key, value] of Object.entries(teamMapping)) {
+    if (key.startsWith("___")) continue; // 주석 스킵
+
+    // 팀 이름에 입력값이 일부 포함되거나, 입력값에 팀 이름이 일부 포함된 경우
+    if (
+      key.toLowerCase().includes(input) ||
+      input.includes(key.toLowerCase())
+    ) {
+      // 중복 방지 (같은 ID의 팀은 한 번만 추가)
+      if (!similarTeams.some((team) => team.id === value)) {
+        similarTeams.push({ name: key, id: value });
+      }
+    }
+  }
+
+  // 2. 글자 유사도 검색 (Levenshtein 거리 활용)
+  if (similarTeams.length < 5) {
+    for (const [key, value] of Object.entries(teamMapping)) {
+      if (key.startsWith("___")) continue;
+
+      // 레벤슈타인 거리 계산 (글자 유사도)
+      const distance = levenshteinDistance(input, key.toLowerCase());
+
+      // 거리가 가까우면 유사 팀으로 간주 (글자 길이에 비례하여 허용 거리 조정)
+      const maxAllowedDistance = Math.max(2, Math.floor(key.length / 3));
+      if (distance <= maxAllowedDistance) {
+        if (!similarTeams.some((team) => team.id === value)) {
+          similarTeams.push({ name: key, id: value });
+        }
+      }
+    }
+  }
+
+  // 결과 정렬 (이름 길이 순)
+  return similarTeams.sort((a, b) => a.name.length - b.name.length).slice(0, 5); // 최대 5개까지
+}
+
+// 레벤슈타인 거리 계산 함수 (글자 유사도)
+function levenshteinDistance(a, b) {
+  const matrix = [];
+
+  // 행렬 초기화
+  for (let i = 0; i <= b.length; i++) {
+    matrix[i] = [i];
+  }
+  for (let j = 0; j <= a.length; j++) {
+    matrix[0][j] = j;
+  }
+
+  // 행렬 채우기
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1, // 대체
+          matrix[i][j - 1] + 1, // 삽입
+          matrix[i - 1][j] + 1, // 삭제
+        );
+      }
+    }
+  }
+
+  return matrix[b.length][a.length];
 }
 
 // 풍향 변환 함수
@@ -1705,10 +2168,33 @@ client.on("guildCreate", async (guild) => {
 // 인터랙션 처리
 client.on("interactionCreate", async (interaction) => {
   try {
-    if (!interaction.isCommand() && !interaction.isButton()) return;
+    // 자동완성 상호작용 처리 - 가장 먼저 처리
+    if (interaction.isAutocomplete()) {
+      if (interaction.commandName === "축구") {
+        const focusedValue = interaction.options.getFocused().toLowerCase();
 
+        // 입력값에 따라 필터링된 추천 리스트 준비
+        const filtered = Object.keys(teamMapping)
+          // 주석 제외
+          .filter((key) => !key.startsWith("___"))
+          // 입력값 포함 여부로 필터링
+          .filter((key) => key.toLowerCase().includes(focusedValue))
+          // 25개로 제한하고 객체 형태로 변환
+          .slice(0, 25)
+          .map((key) => ({ name: key, value: key }));
+
+        await interaction.respond(filtered);
+      }
+      return; // 자동완성 처리 후 함수 종료
+    }
+    // 명령어나 버튼이 아니면 처리하지 않음
+    if (!interaction.isCommand() && !interaction.isButton()) return;
     // 슬래시 커맨드 처리
     if (interaction.isCommand()) {
+      if (interaction.commandName === "축구") {
+        await handleFootballCommand(interaction);
+      }
+
       if (interaction.commandName === "피파") {
         await handleFifaCommand(interaction);
       }

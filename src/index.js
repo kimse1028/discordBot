@@ -19,6 +19,9 @@ const {
 } = require("discord.js");
 const dotenv = require("dotenv");
 
+// 축구 검색 API
+const FOOTBALL_API_KEY = process.env.FOOTBALL_API_KEY;
+
 // 피파 API 관련 상수
 const FCONLINE_API_KEY = process.env.FCONLINE_API_KEY;
 
@@ -295,6 +298,9 @@ const championMapping = JSON.parse(
 );
 const itemMapping = JSON.parse(
   fs.readFileSync(path.join(__dirname, "./data/tftItems.json"), "utf8"),
+);
+const teamMapping = JSON.parse(
+  fs.readFileSync(path.join(__dirname, "./data/teamMapping.json"), "utf8"),
 );
 
 // TFT 아이템 커맨드에서 사용할 자동완성 선택지 생성
@@ -646,6 +652,15 @@ const client = new Client({
 // 슬래시 커맨드 정의
 const commands = [
   new SlashCommandBuilder()
+    .setName("축구")
+    .setDescription("축구 팀 정보를 조회합니다")
+    .addStringOption((option) =>
+      option
+        .setName("팀명")
+        .setDescription("조회할 축구팀 이름을 입력하세요")
+        .setRequired(true),
+    ),
+  new SlashCommandBuilder()
     .setName("피파")
     .setDescription("피파 온라인 사용자 정보를 조회합니다")
     .addStringOption((option) =>
@@ -808,6 +823,223 @@ function setLongTimeout(callback, delay) {
     }, MAX_TIMEOUT);
   } else {
     return setTimeout(callback, delay);
+  }
+}
+
+// 팀 검색 함수
+async function searchFootballTeam(teamName) {
+  try {
+    console.log(`팀 '${teamName}' 검색 시작`);
+
+    // 입력값 전처리 (소문자 변환, 앞뒤 공백 제거)
+    const processedName = teamName.trim().toLowerCase();
+
+    // 1. 매핑 테이블에서 먼저 검색
+    if (teamMapping[processedName] || teamMapping[teamName]) {
+      const teamId = teamMapping[processedName] || teamMapping[teamName];
+      console.log(`매핑 테이블에서 팀 ID 찾음: ${teamId}`);
+
+      const response = await axios.get(
+        `https://api.football-data.org/v4/teams/${teamId}`,
+        {
+          headers: { "X-Auth-Token": FOOTBALL_API_KEY },
+        },
+      );
+
+      return response.data;
+    }
+
+    // 2. 매핑 테이블에 없는 경우 API 검색
+    console.log(`매핑 테이블에서 팀을 찾지 못함, API 검색 시도 중...`);
+
+    // API를 통한 팀 검색
+    const searchResponse = await axios.get(
+      `https://api.football-data.org/v4/teams`,
+      {
+        headers: { "X-Auth-Token": FOOTBALL_API_KEY },
+        params: { name: teamName },
+      },
+    );
+
+    // 검색 결과가 없을 경우
+    if (!searchResponse.data.teams || searchResponse.data.teams.length === 0) {
+      console.log(`'${teamName}' 팀을 찾을 수 없음`);
+
+      // 유사 검색 시도 (부분 일치)
+      const fuzzySearchResponse = await axios.get(
+        `https://api.football-data.org/v4/teams`,
+        {
+          headers: { "X-Auth-Token": FOOTBALL_API_KEY },
+        },
+      );
+
+      if (
+        fuzzySearchResponse.data.teams &&
+        fuzzySearchResponse.data.teams.length > 0
+      ) {
+        // 팀 이름 부분 일치 검색
+        const potentialMatches = fuzzySearchResponse.data.teams.filter(
+          (team) =>
+            team.name.toLowerCase().includes(processedName) ||
+            team.shortName?.toLowerCase().includes(processedName) ||
+            team.tla?.toLowerCase() === processedName,
+        );
+
+        if (potentialMatches.length > 0) {
+          console.log(`유사한 팀 ${potentialMatches.length}개 찾음`);
+          return potentialMatches[0]; // 첫 번째 유사 결과 반환
+        }
+      }
+
+      return null;
+    }
+
+    console.log(
+      `팀 찾음: ${searchResponse.data.teams[0].name} (ID: ${searchResponse.data.teams[0].id})`,
+    );
+    return searchResponse.data.teams[0];
+  } catch (error) {
+    console.error("축구 팀 검색 중 에러:", error.message);
+
+    if (error.response) {
+      console.error(`API 응답 에러: ${error.response.status}`);
+      console.error(`에러 상세 정보:`, error.response.data);
+    }
+
+    throw error;
+  }
+}
+
+// 팀 상세 정보 조회
+async function getTeamDetails(teamId) {
+  try {
+    const response = await axios.get(
+      `https://api.football-data.org/v4/teams/${teamId}`,
+      {
+        headers: { "X-Auth-Token": FOOTBALL_API_KEY },
+      },
+    );
+
+    return response.data;
+  } catch (error) {
+    console.error(`팀 상세 정보 조회 중 에러(ID: ${teamId}):`, error.message);
+    throw error;
+  }
+}
+
+// 팀 일정 조회
+async function getTeamMatches(teamId) {
+  try {
+    const response = await axios.get(
+      `https://api.football-data.org/v4/teams/${teamId}/matches`,
+      {
+        headers: { "X-Auth-Token": FOOTBALL_API_KEY },
+        params: { limit: 5, status: "SCHEDULED" },
+      },
+    );
+
+    return response.data.matches;
+  } catch (error) {
+    console.error(`팀 일정 조회 중 에러(ID: ${teamId}):`, error.message);
+    throw error;
+  }
+}
+
+// 축구 정보 조회 핸들러
+async function handleFootballCommand(interaction) {
+  try {
+    await interaction.deferReply();
+
+    const teamName = interaction.options.getString("팀명");
+    console.log(`팀명 "${teamName}"에 대한 정보 조회 시작...`);
+
+    // 팀 검색
+    const team = await searchFootballTeam(teamName);
+    if (!team) {
+      return await interaction.editReply(
+        `'${teamName}' 팀을 찾을 수 없습니다.`,
+      );
+    }
+
+    // 팀 상세 정보
+    const teamDetails = await getTeamDetails(team.id);
+
+    // 팀 일정
+    const upcomingMatches = await getTeamMatches(team.id);
+
+    // 임베드 생성
+    const embed = new EmbedBuilder()
+      .setColor("#0099ff")
+      .setTitle(`⚽ ${teamDetails.name}`)
+      .setDescription(
+        `${teamDetails.area.name} / ${teamDetails.founded ? `창단: ${teamDetails.founded}년` : "창단연도 정보 없음"}`,
+      )
+      .setThumbnail(teamDetails.crest)
+      .addFields(
+        {
+          name: "홈 경기장",
+          value: teamDetails.venue || "정보 없음",
+          inline: true,
+        },
+        {
+          name: "리그",
+          value:
+            teamDetails.runningCompetitions.map((c) => c.name).join(", ") ||
+            "정보 없음",
+          inline: true,
+        },
+        {
+          name: "웹사이트",
+          value: teamDetails.website || "정보 없음",
+          inline: true,
+        },
+      )
+      .setFooter({ text: "데이터 제공: football-data.org" })
+      .setTimestamp();
+
+    // 다가오는 경기 추가
+    if (upcomingMatches && upcomingMatches.length > 0) {
+      embed.addFields({
+        name: "다가오는 경기",
+        value:
+          upcomingMatches
+            .slice(0, 3)
+            .map((match) => {
+              const matchDate = new Date(match.utcDate);
+              const formattedDate = new Intl.DateTimeFormat("ko-KR", {
+                month: "2-digit",
+                day: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
+                hour12: false,
+              }).format(matchDate);
+
+              return `${formattedDate} ${match.homeTeam.name} vs ${match.awayTeam.name}`;
+            })
+            .join("\n") || "예정된 경기 없음",
+      });
+    }
+
+    await interaction.editReply({ embeds: [embed] });
+  } catch (error) {
+    console.error("축구 정보 조회 중 에러:", error);
+
+    let errorMessage = "정보를 조회하는 중 오류가 발생했습니다.";
+    if (error.response) {
+      if (error.response.status === 404) {
+        errorMessage = "존재하지 않는 팀입니다.";
+      } else if (error.response.status === 429) {
+        errorMessage =
+          "API 요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.";
+      } else if (
+        error.response.status === 401 ||
+        error.response.status === 403
+      ) {
+        errorMessage = "API 키가 유효하지 않습니다. 관리자에게 문의하세요.";
+      }
+    }
+
+    await interaction.editReply(`⚠️ ${errorMessage}`);
   }
 }
 
@@ -1709,6 +1941,9 @@ client.on("interactionCreate", async (interaction) => {
 
     // 슬래시 커맨드 처리
     if (interaction.isCommand()) {
+      if (interaction.commandName === "축구") {
+        await handleFootballCommand(interaction);
+      }
       if (interaction.commandName === "피파") {
         await handleFifaCommand(interaction);
       }

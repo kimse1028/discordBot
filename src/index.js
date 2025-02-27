@@ -654,11 +654,13 @@ const commands = [
   new SlashCommandBuilder()
     .setName("축구")
     .setDescription("축구 팀 정보를 조회합니다")
-    .addStringOption((option) =>
-      option
-        .setName("팀명")
-        .setDescription("조회할 축구팀 이름을 입력하세요")
-        .setRequired(true),
+    .addStringOption(
+      (option) =>
+        option
+          .setName("팀명")
+          .setDescription("조회할 축구팀 이름을 입력하세요")
+          .setRequired(true)
+          .setAutocomplete(true), // 자동완성 활성화
     ),
   new SlashCommandBuilder()
     .setName("피파")
@@ -849,55 +851,65 @@ async function searchFootballTeam(teamName) {
       return response.data;
     }
 
-    // 2. 매핑 테이블에 없는 경우 API 검색
-    console.log(`매핑 테이블에서 팀을 찾지 못함, API 검색 시도 중...`);
+    // 2. API로 팀 직접 검색 시도
+    console.log(`매핑 테이블에서 팀을 찾지 못함, 모든 팀 로드 시도 중...`);
 
-    // API를 통한 팀 검색
-    const searchResponse = await axios.get(
-      `https://api.football-data.org/v4/teams`,
-      {
-        headers: { "X-Auth-Token": FOOTBALL_API_KEY },
-        params: { name: teamName },
-      },
-    );
+    // 개선: 주요 리그별로 팀 데이터 로드 (한 번에 모든 팀 로드)
+    const leagueCodes = ["PL", "PD", "BL1", "SA", "FL1", "DED"]; // 주요 리그
+    let allTeams = [];
 
-    // 검색 결과가 없을 경우
-    if (!searchResponse.data.teams || searchResponse.data.teams.length === 0) {
-      console.log(`'${teamName}' 팀을 찾을 수 없음`);
-
-      // 유사 검색 시도 (부분 일치)
-      const fuzzySearchResponse = await axios.get(
-        `https://api.football-data.org/v4/teams`,
-        {
-          headers: { "X-Auth-Token": FOOTBALL_API_KEY },
-        },
-      );
-
-      if (
-        fuzzySearchResponse.data.teams &&
-        fuzzySearchResponse.data.teams.length > 0
-      ) {
-        // 팀 이름 부분 일치 검색
-        const potentialMatches = fuzzySearchResponse.data.teams.filter(
-          (team) =>
-            team.name.toLowerCase().includes(processedName) ||
-            team.shortName?.toLowerCase().includes(processedName) ||
-            team.tla?.toLowerCase() === processedName,
+    // API 요청 제한을 고려하여 주요 리그만 검색 (필요에 따라 조정)
+    for (const code of leagueCodes) {
+      try {
+        console.log(`${code} 리그 팀 로드 중...`);
+        const leagueResponse = await axios.get(
+          `https://api.football-data.org/v4/competitions/${code}/teams`,
+          {
+            headers: { "X-Auth-Token": FOOTBALL_API_KEY },
+          },
         );
 
-        if (potentialMatches.length > 0) {
-          console.log(`유사한 팀 ${potentialMatches.length}개 찾음`);
-          return potentialMatches[0]; // 첫 번째 유사 결과 반환
+        if (leagueResponse.data.teams) {
+          allTeams = [...allTeams, ...leagueResponse.data.teams];
         }
+      } catch (error) {
+        console.error(`${code} 리그 팀 로드 실패:`, error.message);
+        // 오류가 발생해도 계속 진행
       }
-
-      return null;
     }
 
-    console.log(
-      `팀 찾음: ${searchResponse.data.teams[0].name} (ID: ${searchResponse.data.teams[0].id})`,
-    );
-    return searchResponse.data.teams[0];
+    console.log(`총 ${allTeams.length}개 팀 로드 완료`);
+
+    // 3. 팀 이름 유사도 검색
+    if (allTeams.length > 0) {
+      // 정확한 이름 일치 검색
+      let foundTeam = allTeams.find(
+        (team) =>
+          team.name.toLowerCase() === processedName ||
+          team.shortName?.toLowerCase() === processedName ||
+          team.tla?.toLowerCase() === processedName,
+      );
+
+      // 정확한 일치가 없으면 부분 일치 검색
+      if (!foundTeam) {
+        foundTeam = allTeams.find(
+          (team) =>
+            team.name.toLowerCase().includes(processedName) ||
+            processedName.includes(team.name.toLowerCase()) ||
+            (team.shortName &&
+              team.shortName.toLowerCase().includes(processedName)) ||
+            (team.tla && processedName.includes(team.tla.toLowerCase())),
+        );
+      }
+
+      if (foundTeam) {
+        console.log(`팀 찾음: ${foundTeam.name} (ID: ${foundTeam.id})`);
+        return foundTeam;
+      }
+    }
+
+    console.log(`'${teamName}' 팀을 찾을 수 없음`);
+    return null;
   } catch (error) {
     console.error("축구 팀 검색 중 에러:", error.message);
 
@@ -1068,32 +1080,21 @@ async function handleFootballCommand(interaction) {
       .setFooter({ text: "데이터 제공: football-data.org" })
       .setTimestamp();
 
-    // 팀 성적 정보 추가 (리그 순위 등)
-    if (
-      teamDetails.runningCompetitions &&
-      teamDetails.runningCompetitions.length > 0
-    ) {
-      try {
-        // 리그 순위 정보가 있을 경우 추가
-        const mainLeague = teamDetails.runningCompetitions[0]; // 주요 리그
+    // 팀 성적 정보 추가
+    if (standingInfo) {
+      embed.addFields({
+        name: "📊 현재 순위",
+        value: `${standingInfo.position}위 / ${standingInfo.totalTeams}팀 중 (${standingInfo.competition.name})`,
+        inline: false,
+      });
 
-        embed.addFields({
-          name: "📊 현재 순위",
-          value: `${teamPosition}위 / ${totalTeams}팀 중 (${mainLeague.name})`,
-          inline: false,
-        });
-
-        // 여기에 리그 성적 추가 (승/무/패, 득점/실점 등)
-        if (teamStats) {
-          embed.addFields({
-            name: "📈 시즌 성적",
-            value: `${teamStats.won}승 ${teamStats.draw}무 ${teamStats.lost}패 | ${teamStats.goalsFor}득점 ${teamStats.goalsAgainst}실점`,
-            inline: false,
-          });
-        }
-      } catch (error) {
-        console.error("팀 성적 정보 로딩 실패:", error);
-      }
+      // 성적 정보 추가
+      const stats = standingInfo.stats;
+      embed.addFields({
+        name: "📈 시즌 성적",
+        value: `${stats.won}승 ${stats.draw}무 ${stats.lost}패 | ${stats.points}점\n${stats.goalsFor}득점 ${stats.goalsAgainst}실점 | ${stats.playedGames}경기`,
+        inline: false,
+      });
     }
 
     // 다가오는 경기
@@ -1198,6 +1199,79 @@ async function handleFootballCommand(interaction) {
 
     await interaction.editReply(`⚠️ ${errorMessage}`);
   }
+}
+
+// 팀을 찾지 못했을 때 유사한 팀 찾기
+function findSimilarTeams(teamName) {
+  const input = teamName.toLowerCase();
+  let similarTeams = [];
+
+  // 1. 포함 관계 검색
+  for (const [key, value] of Object.entries(teamMapping)) {
+    if (key.startsWith("___")) continue; // 주석 스킵
+
+    // 팀 이름에 입력값이 일부 포함되거나, 입력값에 팀 이름이 일부 포함된 경우
+    if (
+      key.toLowerCase().includes(input) ||
+      input.includes(key.toLowerCase())
+    ) {
+      // 중복 방지 (같은 ID의 팀은 한 번만 추가)
+      if (!similarTeams.some((team) => team.id === value)) {
+        similarTeams.push({ name: key, id: value });
+      }
+    }
+  }
+
+  // 2. 글자 유사도 검색 (Levenshtein 거리 활용)
+  if (similarTeams.length < 5) {
+    for (const [key, value] of Object.entries(teamMapping)) {
+      if (key.startsWith("___")) continue;
+
+      // 레벤슈타인 거리 계산 (글자 유사도)
+      const distance = levenshteinDistance(input, key.toLowerCase());
+
+      // 거리가 가까우면 유사 팀으로 간주 (글자 길이에 비례하여 허용 거리 조정)
+      const maxAllowedDistance = Math.max(2, Math.floor(key.length / 3));
+      if (distance <= maxAllowedDistance) {
+        if (!similarTeams.some((team) => team.id === value)) {
+          similarTeams.push({ name: key, id: value });
+        }
+      }
+    }
+  }
+
+  // 결과 정렬 (이름 길이 순)
+  return similarTeams.sort((a, b) => a.name.length - b.name.length).slice(0, 5); // 최대 5개까지
+}
+
+// 레벤슈타인 거리 계산 함수 (글자 유사도)
+function levenshteinDistance(a, b) {
+  const matrix = [];
+
+  // 행렬 초기화
+  for (let i = 0; i <= b.length; i++) {
+    matrix[i] = [i];
+  }
+  for (let j = 0; j <= a.length; j++) {
+    matrix[0][j] = j;
+  }
+
+  // 행렬 채우기
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1, // 대체
+          matrix[i][j - 1] + 1, // 삽입
+          matrix[i - 1][j] + 1, // 삭제
+        );
+      }
+    }
+  }
+
+  return matrix[b.length][a.length];
 }
 
 // 풍향 변환 함수
@@ -2094,13 +2168,33 @@ client.on("guildCreate", async (guild) => {
 // 인터랙션 처리
 client.on("interactionCreate", async (interaction) => {
   try {
-    if (!interaction.isCommand() && !interaction.isButton()) return;
+    // 자동완성 상호작용 처리 - 가장 먼저 처리
+    if (interaction.isAutocomplete()) {
+      if (interaction.commandName === "축구") {
+        const focusedValue = interaction.options.getFocused().toLowerCase();
 
+        // 입력값에 따라 필터링된 추천 리스트 준비
+        const filtered = Object.keys(teamMapping)
+          // 주석 제외
+          .filter((key) => !key.startsWith("___"))
+          // 입력값 포함 여부로 필터링
+          .filter((key) => key.toLowerCase().includes(focusedValue))
+          // 25개로 제한하고 객체 형태로 변환
+          .slice(0, 25)
+          .map((key) => ({ name: key, value: key }));
+
+        await interaction.respond(filtered);
+      }
+      return; // 자동완성 처리 후 함수 종료
+    }
+    // 명령어나 버튼이 아니면 처리하지 않음
+    if (!interaction.isCommand() && !interaction.isButton()) return;
     // 슬래시 커맨드 처리
     if (interaction.isCommand()) {
       if (interaction.commandName === "축구") {
         await handleFootballCommand(interaction);
       }
+
       if (interaction.commandName === "피파") {
         await handleFifaCommand(interaction);
       }

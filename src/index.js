@@ -945,6 +945,70 @@ async function getTeamMatches(teamId) {
   }
 }
 
+// 팀 순위 정보 조회 함수
+async function getTeamStanding(teamId) {
+  try {
+    // 1. 팀 정보에서 주요 리그 ID 찾기
+    const teamDetails = await getTeamDetails(teamId);
+    if (
+      !teamDetails.runningCompetitions ||
+      teamDetails.runningCompetitions.length === 0
+    ) {
+      return null;
+    }
+
+    // 일반적으로 첫 번째 대회가 주요 리그일 가능성이 높음
+    const mainCompetition = teamDetails.runningCompetitions[0];
+
+    // 2. 해당 리그의 순위표 조회
+    const response = await axios.get(
+      `https://api.football-data.org/v4/competitions/${mainCompetition.code}/standings`,
+      {
+        headers: { "X-Auth-Token": FOOTBALL_API_KEY },
+      },
+    );
+
+    if (!response.data.standings || response.data.standings.length === 0) {
+      return null;
+    }
+
+    // 3. 팀의 순위 정보 찾기 (일반적으로 TOTAL 타입의 순위표 사용)
+    const regularStanding = response.data.standings.find(
+      (s) => s.type === "TOTAL",
+    );
+    if (!regularStanding || !regularStanding.table) {
+      return null;
+    }
+
+    // 4. 해당 팀의 순위 찾기
+    const teamStanding = regularStanding.table.find(
+      (t) => t.team.id === teamId,
+    );
+    if (!teamStanding) {
+      return null;
+    }
+
+    // 5. 팀 순위 및 전체 팀 수 반환
+    return {
+      position: teamStanding.position,
+      totalTeams: regularStanding.table.length,
+      stats: {
+        playedGames: teamStanding.playedGames,
+        won: teamStanding.won,
+        draw: teamStanding.draw,
+        lost: teamStanding.lost,
+        points: teamStanding.points,
+        goalsFor: teamStanding.goalsFor,
+        goalsAgainst: teamStanding.goalsAgainst,
+      },
+      competition: mainCompetition,
+    };
+  } catch (error) {
+    console.error(`팀 순위 정보 조회 중 에러(ID: ${teamId}):`, error.message);
+    return null;
+  }
+}
+
 // 축구 정보 조회 핸들러
 async function handleFootballCommand(interaction) {
   try {
@@ -967,56 +1031,149 @@ async function handleFootballCommand(interaction) {
     // 팀 일정
     const upcomingMatches = await getTeamMatches(team.id);
 
+    // 팀 순위 정보
+    let standingInfo = null;
+    try {
+      standingInfo = await getTeamStanding(team.id);
+    } catch (error) {
+      console.error("순위 정보 조회 실패:", error);
+    }
+
     // 임베드 생성
     const embed = new EmbedBuilder()
       .setColor("#0099ff")
       .setTitle(`⚽ ${teamDetails.name}`)
       .setDescription(
-        `${teamDetails.area.name} / ${teamDetails.founded ? `창단: ${teamDetails.founded}년` : "창단연도 정보 없음"}`,
+        `**${teamDetails.area.name}**${teamDetails.founded ? ` | 창단: ${teamDetails.founded}년` : ""}`,
       )
       .setThumbnail(teamDetails.crest)
       .addFields(
         {
-          name: "홈 경기장",
+          name: "🏟️ 홈 경기장",
           value: teamDetails.venue || "정보 없음",
           inline: true,
         },
         {
-          name: "리그",
+          name: "🏆 참가 대회",
           value:
             teamDetails.runningCompetitions.map((c) => c.name).join(", ") ||
             "정보 없음",
           inline: true,
         },
-        {
-          name: "웹사이트",
-          value: teamDetails.website || "정보 없음",
-          inline: true,
-        },
       )
+      .addFields({
+        name: "🌐 정보",
+        value: `[공식 웹사이트](${teamDetails.website || "#"})${teamDetails.address ? ` | 주소: ${teamDetails.address}` : ""}`,
+      })
       .setFooter({ text: "데이터 제공: football-data.org" })
       .setTimestamp();
 
-    // 다가오는 경기 추가
-    if (upcomingMatches && upcomingMatches.length > 0) {
-      embed.addFields({
-        name: "다가오는 경기",
-        value:
-          upcomingMatches
-            .slice(0, 3)
-            .map((match) => {
-              const matchDate = new Date(match.utcDate);
-              const formattedDate = new Intl.DateTimeFormat("ko-KR", {
-                month: "2-digit",
-                day: "2-digit",
-                hour: "2-digit",
-                minute: "2-digit",
-                hour12: false,
-              }).format(matchDate);
+    // 팀 성적 정보 추가 (리그 순위 등)
+    if (
+      teamDetails.runningCompetitions &&
+      teamDetails.runningCompetitions.length > 0
+    ) {
+      try {
+        // 리그 순위 정보가 있을 경우 추가
+        const mainLeague = teamDetails.runningCompetitions[0]; // 주요 리그
 
-              return `${formattedDate} ${match.homeTeam.name} vs ${match.awayTeam.name}`;
-            })
-            .join("\n") || "예정된 경기 없음",
+        embed.addFields({
+          name: "📊 현재 순위",
+          value: `${teamPosition}위 / ${totalTeams}팀 중 (${mainLeague.name})`,
+          inline: false,
+        });
+
+        // 여기에 리그 성적 추가 (승/무/패, 득점/실점 등)
+        if (teamStats) {
+          embed.addFields({
+            name: "📈 시즌 성적",
+            value: `${teamStats.won}승 ${teamStats.draw}무 ${teamStats.lost}패 | ${teamStats.goalsFor}득점 ${teamStats.goalsAgainst}실점`,
+            inline: false,
+          });
+        }
+      } catch (error) {
+        console.error("팀 성적 정보 로딩 실패:", error);
+      }
+    }
+
+    // 다가오는 경기
+    if (upcomingMatches && upcomingMatches.length > 0) {
+      // 제목만 따로 추가
+      embed.addFields({
+        name: "📅 다가오는 경기 일정",
+        value: "\u200B", // 빈 문자를 넣어 구분선 효과
+      });
+
+      // 각 경기를 개별 필드로 추가
+      upcomingMatches.slice(0, 3).forEach((match, index) => {
+        const matchDate = new Date(match.utcDate);
+
+        // 요일 표시 추가
+        const days = ["일", "월", "화", "수", "목", "금", "토"];
+        const dayOfWeek = days[matchDate.getDay()];
+
+        // 날짜 형식 개선
+        const formattedDate = `${matchDate.getMonth() + 1}월 ${matchDate.getDate()}일 (${dayOfWeek})`;
+
+        // 시간 형식 개선
+        let hours = matchDate.getHours();
+        const minutes = matchDate.getMinutes().toString().padStart(2, "0");
+        const ampm = hours >= 12 ? "오후" : "오전";
+        hours = hours % 12;
+        hours = hours ? hours : 12; // 0시는 12시로 표시
+        const formattedTime = `${ampm} ${hours}:${minutes}`;
+
+        // 홈/원정 구분을 위한 이모지
+        const isHome = match.homeTeam.id === teamDetails.id;
+        const matchEmoji = isHome ? "🏠" : "🚌";
+
+        // 경기 정보 구성
+        let opponent = isHome ? match.awayTeam.name : match.homeTeam.name;
+        let matchInfo = isHome
+          ? `${teamDetails.shortName || teamDetails.name} vs ${opponent}`
+          : `${opponent} vs ${teamDetails.shortName || teamDetails.name}`;
+
+        // 대회 정보 추가
+        let competition = "";
+        if (match.competition) {
+          competition = `${match.competition.name}`;
+        }
+
+        embed.addFields({
+          name: `${matchEmoji} ${formattedDate} ${formattedTime}`,
+          value: `**${matchInfo}**\n${competition}`,
+          inline: false,
+        });
+      });
+
+      // 만약 더 많은 경기가 있다면 안내
+      if (upcomingMatches.length > 3) {
+        embed.addFields({
+          name: "\u200B",
+          value: `*이외 ${upcomingMatches.length - 3}개의 경기가 더 예정되어 있습니다.*`,
+        });
+      }
+    } else {
+      embed.addFields({
+        name: "📅 다가오는 경기 일정",
+        value: "예정된 경기가 없습니다.",
+      });
+    }
+
+    // 팀 성적 정보 추가
+    if (standingInfo) {
+      embed.addFields({
+        name: "📊 현재 순위",
+        value: `${standingInfo.position}위 / ${standingInfo.totalTeams}팀 중 (${standingInfo.competition.name})`,
+        inline: false,
+      });
+
+      // 성적 정보 추가
+      const stats = standingInfo.stats;
+      embed.addFields({
+        name: "📈 시즌 성적",
+        value: `${stats.won}승 ${stats.draw}무 ${stats.lost}패 | ${stats.points}점\n${stats.goalsFor}득점 ${stats.goalsAgainst}실점 | ${stats.playedGames}경기`,
+        inline: false,
       });
     }
 

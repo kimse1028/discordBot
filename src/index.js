@@ -652,6 +652,21 @@ const client = new Client({
 // 슬래시 커맨드 정의
 const commands = [
   new SlashCommandBuilder()
+    .setName("발로란트")
+    .setDescription("발로란트 플레이어 정보를 조회합니다")
+    .addStringOption((option) =>
+      option
+        .setName("라이엇아이디")
+        .setDescription("검색할 라이엇 ID를 입력하세요 (예: Hide)")
+        .setRequired(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("태그라인")
+        .setDescription("검색할 태그라인을 입력하세요 (예: KR1)")
+        .setRequired(true),
+    ),
+  new SlashCommandBuilder()
     .setName("축구")
     .setDescription("축구 팀 정보를 조회합니다")
     .addStringOption(
@@ -801,6 +816,300 @@ const commands = [
     .setName("운세")
     .setDescription("오늘의 운세를 확인합니다"),
 ];
+
+// 발로란트 플레이어 통계 조회 함수 (개선 버전)
+async function getValorantPlayerStats(riotId, tagLine) {
+  try {
+    const encodedName = encodeURIComponent(riotId);
+    const encodedTagLine = encodeURIComponent(tagLine);
+
+    const response = await axios.get(
+      `https://public-api.tracker.gg/v2/valorant/standard/profile/riot/${encodedName}%23${encodedTagLine}`,
+      {
+        headers: {
+          "TRN-Api-Key": process.env.TRACKERGG_API_KEY,
+          Accept: "application/json",
+          "Accept-Encoding": "gzip",
+        },
+      },
+    );
+    console.log("발로란트 플레이어 정보 응답 데이터 받음");
+    return response.data;
+  } catch (error) {
+    console.error("발로란트 플레이어 정보 조회 중 에러:", error.message);
+    if (error.response && error.response.data) {
+      console.error(
+        "응답 에러 상세 정보:",
+        JSON.stringify(error.response.data),
+      );
+    }
+    throw error;
+  }
+}
+
+// 캐싱 기능 추가
+const VALORANT_CACHE_DURATION = 5 * 60 * 1000; // 5분
+const valorantCache = new Map();
+
+async function getValorantPlayerStatsWithCache(riotId, tagLine) {
+  const cacheKey = `${riotId.toLowerCase()}#${tagLine.toLowerCase()}`;
+  const cachedData = valorantCache.get(cacheKey);
+
+  if (
+    cachedData &&
+    Date.now() - cachedData.timestamp < VALORANT_CACHE_DURATION
+  ) {
+    console.log(`캐시에서 ${cacheKey} 정보 가져옴`);
+    return cachedData.data;
+  }
+
+  console.log(`${cacheKey} 정보 API에서 새로 가져오는 중...`);
+  const data = await getValorantPlayerStats(riotId, tagLine);
+  valorantCache.set(cacheKey, {
+    data,
+    timestamp: Date.now(),
+  });
+
+  return data;
+}
+
+// 발로란트 정보 조회 핸들러 (상세 정보 포함)
+async function handleValorantCommand(interaction) {
+  try {
+    await interaction.deferReply();
+
+    const riotId = interaction.options.getString("라이엇아이디");
+    const tagLine = interaction.options.getString("태그라인");
+    console.log(
+      `라이엇 ID: ${riotId}, 태그라인: ${tagLine}에 대한 정보 조회 시작...`,
+    );
+
+    // 발로란트 플레이어 정보 호출 (캐싱 적용)
+    const playerData = await getValorantPlayerStatsWithCache(riotId, tagLine);
+
+    if (!playerData || !playerData.data) {
+      return await interaction.editReply(
+        `'${riotId}#${tagLine}' 플레이어를 찾을 수 없습니다.`,
+      );
+    }
+
+    // 기본 임베드 생성
+    const embed = new EmbedBuilder()
+      .setColor("#fa4454") // 발로란트 레드 색상
+      .setAuthor({
+        name: `${playerData.data.platformInfo.platformUserHandle}`,
+        iconURL:
+          "https://trackercdn.com/cdn/tracker.gg/valorant/icons/logo.png",
+      })
+      .setTitle(`경쟁전 정보`)
+      .setFooter({ text: "데이터 제공: Tracker.gg" })
+      .setTimestamp();
+
+    // 메인 통계 정보 추출
+    const segments = playerData.data.segments;
+    const overview = segments?.find((segment) => segment.type === "overview");
+
+    if (!overview || !overview.stats) {
+      return await interaction.editReply(
+        "플레이어 통계 정보를 찾을 수 없습니다.",
+      );
+    }
+
+    const stats = overview.stats;
+
+    // 경쟁전 등급 및 레벨 정보
+    let rankInfo = "등급 정보 없음";
+    let rankIcon = null;
+
+    if (stats.rank) {
+      rankInfo = stats.rank.displayValue || "Unranked";
+      rankIcon = stats.rank.metadata?.iconUrl;
+    }
+
+    const playerLevel = stats.level ? stats.level.displayValue : "정보 없음";
+
+    // 승패 정보
+    const wins = stats.matchesWon ? stats.matchesWon.displayValue : "0";
+    const losses = stats.matchesLost ? stats.matchesLost.displayValue : "0";
+    const winPct = stats.matchesWinPct
+      ? stats.matchesWinPct.displayValue
+      : "0%";
+    const matches = stats.matchesPlayed
+      ? stats.matchesPlayed.displayValue
+      : "0";
+    const playtime = stats.timePlayed
+      ? stats.timePlayed.displayValue
+      : "정보 없음";
+
+    // 임베드 정보 추가
+    if (rankIcon) {
+      embed.setThumbnail(rankIcon);
+    }
+
+    // 상단 정보
+    embed.setDescription(
+      `**${rankInfo}** | 레벨: ${playerLevel} | ${playtime} 플레이`,
+    );
+
+    // 승패 기록 필드
+    embed.addFields({
+      name: "🏆 경기 기록",
+      value: `${matches}경기 | ${wins}승 ${losses}패 | 승률 ${winPct}`,
+      inline: false,
+    });
+
+    // 주요 통계 필드
+    const adr = stats.damagePerRound ? stats.damagePerRound.displayValue : "0";
+    const kd = stats.kDRatio ? stats.kDRatio.displayValue : "0";
+    const hs = stats.headshotsPercentage
+      ? stats.headshotsPercentage.displayValue
+      : "0%";
+
+    embed.addFields({
+      name: "📊 핵심 지표",
+      value: `라운드당 데미지: **${adr}**\nK/D 비율: **${kd}**\n헤드샷 비율: **${hs}**`,
+      inline: true,
+    });
+
+    // 킬/데스/어시스트 통계
+    const kills = stats.kills ? stats.kills.displayValue : "0";
+    const deaths = stats.deaths ? stats.deaths.displayValue : "0";
+    const assists = stats.assists ? stats.assists.displayValue : "0";
+
+    embed.addFields({
+      name: "💥 K/D/A",
+      value: `킬: **${kills}**\n데스: **${deaths}**\n어시스트: **${assists}**`,
+      inline: true,
+    });
+
+    // 추가 통계 필드
+    const aces = stats.aces ? stats.aces.displayValue : "0";
+    const firstBloods = stats.firstBloods
+      ? stats.firstBloods.displayValue
+      : "0";
+    const clutches = stats.clutches ? stats.clutches.displayValue : "0";
+    const flawless = stats.flawlessRounds
+      ? stats.flawlessRounds.displayValue
+      : "0";
+    const kpr = stats.killsPerRound ? stats.killsPerRound.displayValue : "0";
+
+    embed.addFields({
+      name: "🔥 추가 통계",
+      value: `에이스: **${aces}**\n퍼스트 블러드: **${firstBloods}**\n클러치: **${clutches}**\n무결점 라운드: **${flawless}**\n라운드당 킬: **${kpr}**`,
+      inline: false,
+    });
+
+    // 에이전트 정보 추가
+    const agentSegments = segments.filter(
+      (segment) => segment.type === "agent",
+    );
+
+    if (agentSegments && agentSegments.length > 0) {
+      // 경기 수 기준으로 내림차순 정렬
+      const topAgents = agentSegments
+        .sort((a, b) => {
+          const aMatches = a.stats.matchesPlayed
+            ? a.stats.matchesPlayed.value
+            : 0;
+          const bMatches = b.stats.matchesPlayed
+            ? b.stats.matchesPlayed.value
+            : 0;
+          return bMatches - aMatches;
+        })
+        .slice(0, 3); // 상위 3개 에이전트만 표시
+
+      const agentInfo = topAgents.map((agent) => {
+        const name = agent.metadata.name;
+        const matches = agent.stats.matchesPlayed
+          ? agent.stats.matchesPlayed.displayValue
+          : "0";
+        const winRate = agent.stats.matchesWinPct
+          ? agent.stats.matchesWinPct.displayValue
+          : "0%";
+        const kd = agent.stats.kDRatio ? agent.stats.kDRatio.displayValue : "0";
+        const adr = agent.stats.damagePerRound
+          ? agent.stats.damagePerRound.displayValue
+          : "0";
+        const playtime = agent.stats.timePlayed
+          ? agent.stats.timePlayed.displayValue
+          : "0";
+
+        return `**${name}** (${playtime})\n${matches}경기, 승률 ${winRate}, K/D ${kd}, ADR ${adr}`;
+      });
+
+      if (agentInfo.length > 0) {
+        embed.addFields({
+          name: "👤 주요 에이전트",
+          value: agentInfo.join("\n\n"),
+        });
+      }
+    }
+
+    // 맵 정보 추가 (가능한 경우)
+    const mapSegments = segments.filter((segment) => segment.type === "map");
+
+    if (mapSegments && mapSegments.length > 0) {
+      // 승률 기준으로 내림차순 정렬
+      const bestMaps = mapSegments
+        .filter(
+          (map) =>
+            map.stats.matchesPlayed && map.stats.matchesPlayed.value >= 3,
+        ) // 최소 3경기 이상
+        .sort((a, b) => {
+          const aWinPct = a.stats.matchesWinPct
+            ? a.stats.matchesWinPct.value
+            : 0;
+          const bWinPct = b.stats.matchesWinPct
+            ? b.stats.matchesWinPct.value
+            : 0;
+          return bWinPct - aWinPct;
+        })
+        .slice(0, 3); // 상위 3개 맵만 표시
+
+      if (bestMaps.length > 0) {
+        const mapInfo = bestMaps.map((map) => {
+          const name = map.metadata.name;
+          const matches = map.stats.matchesPlayed
+            ? map.stats.matchesPlayed.displayValue
+            : "0";
+          const winRate = map.stats.matchesWinPct
+            ? map.stats.matchesWinPct.displayValue
+            : "0%";
+
+          return `**${name}**: ${matches}경기, 승률 ${winRate}`;
+        });
+
+        embed.addFields({
+          name: "🗺️ 베스트 맵",
+          value: mapInfo.join("\n"),
+        });
+      }
+    }
+
+    await interaction.editReply({ embeds: [embed] });
+  } catch (error) {
+    console.error("발로란트 정보 조회 중 에러:", error);
+
+    let errorMessage = "정보를 조회하는 중 오류가 발생했습니다.";
+    if (error.response) {
+      if (error.response.status === 404) {
+        errorMessage = "존재하지 않는 플레이어입니다.";
+      } else if (error.response.status === 429) {
+        errorMessage =
+          "API 요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.";
+      } else if (
+        error.response.status === 401 ||
+        error.response.status === 403
+      ) {
+        errorMessage = "API 키가 유효하지 않습니다. 관리자에게 문의하세요.";
+      } else {
+        errorMessage = `API 오류 (${error.response.status}): ${error.response.data?.message || "알 수 없는 오류"}`;
+      }
+    }
+
+    await interaction.editReply(`⚠️ ${errorMessage}`);
+  }
+}
 
 // 게임 데이터와 타이머를 함께 관리
 const gameParticipants = new Map();
@@ -2191,6 +2500,9 @@ client.on("interactionCreate", async (interaction) => {
     if (!interaction.isCommand() && !interaction.isButton()) return;
     // 슬래시 커맨드 처리
     if (interaction.isCommand()) {
+      if (interaction.commandName === "발로란트") {
+        await handleValorantCommand(interaction);
+      }
       if (interaction.commandName === "축구") {
         await handleFootballCommand(interaction);
       }

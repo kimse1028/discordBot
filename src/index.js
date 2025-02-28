@@ -998,9 +998,6 @@ async function handleValorantCommand(interaction) {
     // 주요 통계 필드
     const adr = stats.damagePerRound ? stats.damagePerRound.displayValue : "0";
     const kd = stats.kDRatio ? stats.kDRatio.displayValue : "0";
-    const hs = stats.headshotsPercentage
-      ? stats.headshotsPercentage.displayValue
-      : "0%";
 
     embed.addFields({
       name: "📊 핵심 지표",
@@ -2570,14 +2567,7 @@ async function getPubgPlayerStats(
   }
 }
 
-// 시간 포맷팅 함수 (초 -> MM:SS) - 이름을 다르게 변경
-function formatDuration(seconds) {
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = Math.floor(seconds % 60);
-  return `${minutes.toString().padStart(2, "0")}:${remainingSeconds.toString().padStart(2, "0")}`;
-}
-
-// 배틀그라운드 명령어 핸들러 함수 - 랭크 전용으로 수정
+// 배틀그라운드 명령어 핸들러 함수 수정
 async function handlePubgCommand(interaction) {
   try {
     await interaction.deferReply();
@@ -2597,27 +2587,26 @@ async function handlePubgCommand(interaction) {
     // 플레이어 랭크 통계 정보 조회
     const stats = await getPubgPlayerStats(accountId, platform, gameMode);
 
+    // 디버깅을 위해 전체 통계 데이터 출력
+    console.log("랭크 통계 데이터:", JSON.stringify(stats, null, 2));
+
     // 통계 정보 가공
     const kd = stats.kda ? stats.kda.toFixed(2) : "0.00";
-    const damagePerGame = stats.avgDamage ? Math.round(stats.avgDamage) : 0;
+    // 경기당 데미지 계산 수정 - 필드 이름에 따라 조정
+    // avgDamage 필드가 없거나 정확하지 않을 경우 대체 필드 시도
+    const damagePerGame =
+      stats.damageDealt && stats.roundsPlayed
+        ? Math.round(stats.damageDealt / stats.roundsPlayed)
+        : stats.averageDamage || stats.avgDamage || 0;
+
     const winRate = stats.winRatio ? (stats.winRatio * 100).toFixed(1) : "0.0";
     const top10Rate = stats.top10Ratio
       ? (stats.top10Ratio * 100).toFixed(1)
       : "0.0";
     const avgRank = stats.avgRank ? stats.avgRank.toFixed(1) : "N/A";
-    const longestKill = stats.longestKill
-      ? `${stats.longestKill.toFixed(1)}m`
-      : "0m";
-    const headshots = stats.headshotRatio
-      ? (stats.headshotRatio * 100).toFixed(1)
-      : "0.0";
     const totalGames = stats.roundsPlayed || 0;
-    const avgSurviveTime = stats.avgSurvivalTime
-      ? formatDuration(stats.avgSurvivalTime)
-      : "00:00";
-    const kills = stats.kills || 0;
 
-    // 임베드 생성
+    // 임베드 생성 - 최대거리킬, 최다킬 필드 제거
     const embed = new EmbedBuilder()
       .setColor("#0099ff")
       .setTitle(`🎮 ${playerName}님의 배틀그라운드 랭크 전적`)
@@ -2625,7 +2614,7 @@ async function handlePubgCommand(interaction) {
         `플랫폼: ${platform.toUpperCase()} | 모드: ${gameMode.toUpperCase()} | ${totalGames}게임`,
       )
       .addFields(
-        { name: "K/D", value: kd, inline: true },
+        { name: "K/DA", value: kd, inline: true },
         {
           name: "경기 당 데미지",
           value: damagePerGame.toString(),
@@ -2633,15 +2622,7 @@ async function handlePubgCommand(interaction) {
         },
         { name: "승 %", value: `${winRate}%`, inline: true },
         { name: "Top 10%", value: `${top10Rate}%`, inline: true },
-        { name: "최대 거리 킬", value: longestKill, inline: true },
-        { name: "헤드샷", value: `${headshots}%`, inline: true },
         { name: "평균등수", value: avgRank.toString(), inline: true },
-        { name: "평균 생존시간", value: avgSurviveTime, inline: true },
-        {
-          name: "최다 킬",
-          value: stats.maxKills?.toString() || "0",
-          inline: true,
-        },
       )
       .setFooter({ text: "데이터 제공: PUBG API" })
       .setTimestamp();

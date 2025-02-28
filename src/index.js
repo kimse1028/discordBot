@@ -2567,7 +2567,7 @@ async function getPubgPlayerStats(
   }
 }
 
-// 배틀그라운드 명령어 핸들러 함수 수정
+// 배틀그라운드 명령어 핸들러 함수 개선
 async function handlePubgCommand(interaction) {
   try {
     await interaction.deferReply();
@@ -2592,8 +2592,6 @@ async function handlePubgCommand(interaction) {
 
     // 통계 정보 가공
     const kd = stats.kda ? stats.kda.toFixed(2) : "0.00";
-    // 경기당 데미지 계산 수정 - 필드 이름에 따라 조정
-    // avgDamage 필드가 없거나 정확하지 않을 경우 대체 필드 시도
     const damagePerGame =
       stats.damageDealt && stats.roundsPlayed
         ? Math.round(stats.damageDealt / stats.roundsPlayed)
@@ -2606,25 +2604,81 @@ async function handlePubgCommand(interaction) {
     const avgRank = stats.avgRank ? stats.avgRank.toFixed(1) : "N/A";
     const totalGames = stats.roundsPlayed || 0;
 
-    // 임베드 생성 - 최대거리킬, 최다킬 필드 제거
+    // 1위 판수 계산
+    const totalWins = stats.wins || 0;
+
+    // 새로운 임베드 생성
     const embed = new EmbedBuilder()
-      .setColor("#0099ff")
-      .setTitle(`🎮 ${playerName}님의 배틀그라운드 랭크 전적`)
+      .setColor("#f2a900") // PUBG 주황색으로 변경
+      .setTitle(`🔫 ${playerName}님의 배틀그라운드 랭크 전적`)
       .setDescription(
-        `플랫폼: ${platform.toUpperCase()} | 모드: ${gameMode.toUpperCase()} | ${totalGames}게임`,
+        `> **${platform.toUpperCase()}** | **${gameMode.toUpperCase()}** | **총 ${totalGames}판**`,
+      )
+      .setThumbnail(
+        "https://assets.battlegrounds.pubg.com/images/pubg-logo-main-full-type.svg",
       )
       .addFields(
-        { name: "K/DA", value: kd, inline: true },
         {
-          name: "경기 당 데미지",
-          value: damagePerGame.toString(),
-          inline: true,
+          name: "▫️ 주요 성적",
+          value: [
+            `⭐ **K/DA 비율**: \`${kd}\``,
+            `💥 **판당 데미지**: \`${damagePerGame}\``,
+            `🏆 **평균 등수**: \`${avgRank}\``,
+          ].join("\n"),
+          inline: false,
         },
-        { name: "승 %", value: `${winRate}%`, inline: true },
-        { name: "Top 10%", value: `${top10Rate}%`, inline: true },
-        { name: "평균등수", value: avgRank.toString(), inline: true },
-      )
-      .setFooter({ text: "데이터 제공: PUBG API" })
+        {
+          name: "▫️ 승률 정보",
+          value: [
+            `🥇 **우승**: \`${totalWins}회\` (${winRate}%)`,
+            `🏅 **톱 10**: \`${top10Rate}%\``,
+          ].join("\n"),
+          inline: false,
+        },
+      );
+
+    // 퍼포먼스 평가 (K/D와 승률 기반)
+    let performance = "";
+    const kdValue = parseFloat(kd);
+    const winRateValue = parseFloat(winRate);
+
+    if (kdValue >= 5.0 || winRateValue >= 20) {
+      performance = "🔥 **에임 신**";
+    } else if (kdValue >= 3.0 || winRateValue >= 15) {
+      performance = "💯 **상위권 플레이어**";
+    } else if (kdValue >= 2.0 || winRateValue >= 10) {
+      performance = "👍 **숙련된 플레이어**";
+    } else if (kdValue >= 1.0 || winRateValue >= 5) {
+      performance = "👌 **평균 이상**";
+    } else {
+      performance = "🔰 **성장 중**";
+    }
+
+    embed.addFields({
+      name: "▫️ 플레이어 평가",
+      value: performance,
+      inline: false,
+    });
+
+    // 추가 정보 섹션
+    const additionalInfo = [];
+    if (stats.assists)
+      additionalInfo.push(`🤝 **어시스트**: \`${stats.assists}\``);
+    if (stats.kills) additionalInfo.push(`⚔️ **킬**: \`${stats.kills}\``);
+    if (stats.deaths) additionalInfo.push(`💀 **데스**: \`${stats.deaths}\``);
+
+    if (additionalInfo.length > 0) {
+      embed.addFields({
+        name: "▫️ 추가 정보",
+        value: additionalInfo.join("\n"),
+        inline: false,
+      });
+    }
+
+    embed
+      .setFooter({
+        text: "데이터 제공: PUBG API • 위닭스닭스",
+      })
       .setTimestamp();
 
     await interaction.editReply({ embeds: [embed] });

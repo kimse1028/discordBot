@@ -19,6 +19,10 @@ const {
 } = require("discord.js");
 const dotenv = require("dotenv");
 
+// PUBG API
+const PUBG_API_KEY = process.env.PUBG_API_KEY;
+const PUBG_API_BASE = "https://api.pubg.com/shards";
+
 // 축구 검색 API
 const FOOTBALL_API_KEY = process.env.FOOTBALL_API_KEY;
 
@@ -651,6 +655,39 @@ const client = new Client({
 
 // 슬래시 커맨드 정의
 const commands = [
+  new SlashCommandBuilder()
+    .setName("배그")
+    .setDescription("배틀그라운드 랭크 전적을 조회합니다")
+    .addStringOption((option) =>
+      option
+        .setName("닉네임")
+        .setDescription("검색할 닉네임을 입력하세요")
+        .setRequired(true),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("플랫폼")
+        .setDescription("플레이 플랫폼을 선택하세요")
+        .setRequired(true)
+        .addChoices(
+          { name: "카카오", value: "kakao" },
+          { name: "스팀", value: "steam" },
+        ),
+    )
+    .addStringOption((option) =>
+      option
+        .setName("모드")
+        .setDescription("게임 모드를 선택하세요")
+        .setRequired(true)
+        .addChoices(
+          { name: "솔로", value: "solo" },
+          { name: "듀오", value: "duo" },
+          { name: "스쿼드", value: "squad" },
+          { name: "솔로(1인칭)", value: "solo-fpp" },
+          { name: "듀오(1인칭)", value: "duo-fpp" },
+          { name: "스쿼드(1인칭)", value: "squad-fpp" },
+        ),
+    ),
   new SlashCommandBuilder()
     .setName("발로란트")
     .setDescription("발로란트 플레이어 정보를 조회합니다")
@@ -2436,6 +2473,206 @@ setInterval(
   60 * 60 * 1000,
 );
 
+// PUBG API 요청 함수
+async function makePubgRequest(url) {
+  try {
+    const response = await axios.get(url, {
+      headers: {
+        Authorization: `Bearer ${PUBG_API_KEY}`,
+        Accept: "application/vnd.api+json",
+      },
+    });
+    return response.data;
+  } catch (error) {
+    console.error(`PUBG API 요청 오류: ${error.message}`);
+    if (error.response) {
+      console.error(
+        `응답 에러 상세 정보: ${JSON.stringify(error.response.data)}`,
+      );
+    }
+    throw error;
+  }
+}
+
+// 플레이어 정보 조회 함수
+async function getPubgPlayerInfo(playerName, platform = "kakao") {
+  try {
+    // platform은 'kakao' 또는 'steam'
+    const shard = platform === "kakao" ? "kakao" : "steam";
+    const playersUrl = `${PUBG_API_BASE}/${shard}/players?filter[playerNames]=${encodeURIComponent(playerName)}`;
+
+    const playerData = await makePubgRequest(playersUrl);
+
+    if (!playerData.data || playerData.data.length === 0) {
+      throw new Error("플레이어를 찾을 수 없습니다");
+    }
+
+    return playerData.data[0];
+  } catch (error) {
+    console.error(`플레이어 정보 조회 중 에러: ${error.message}`);
+    throw error;
+  }
+}
+
+// 플레이어 랭크 통계 정보 조회 함수
+async function getPubgPlayerStats(
+  accountId,
+  platform = "kakao",
+  gameMode = "solo",
+) {
+  try {
+    const shard = platform === "kakao" ? "kakao" : "steam";
+    const region = platform === "kakao" ? "pc-as" : "pc-na"; // 카카오는 아시아, 스팀은 북미 기본값
+
+    // 시즌 정보 가져오기
+    const seasonsUrl = `${PUBG_API_BASE}/${shard}/seasons`;
+    const seasonsData = await makePubgRequest(seasonsUrl);
+
+    // 현재 시즌 찾기
+    const currentSeason = seasonsData.data.find(
+      (season) => season.attributes.isCurrentSeason,
+    );
+
+    if (!currentSeason) {
+      throw new Error("현재 시즌 정보를 찾을 수 없습니다");
+    }
+
+    // 시즌 통계 가져오기
+    const statsUrl = `${PUBG_API_BASE}/${shard}/players/${accountId}/seasons/${currentSeason.id}/ranked`;
+    const statsData = await makePubgRequest(statsUrl);
+
+    if (!statsData.data.attributes.rankedGameModeStats) {
+      throw new Error("랭크 모드 통계를 찾을 수 없습니다");
+    }
+
+    // 게임 모드에 따른 통계 정보 추출
+    const gameModeMap = {
+      solo: "solo",
+      duo: "duo",
+      squad: "squad",
+      "solo-fpp": "solo-fpp",
+      "duo-fpp": "duo-fpp",
+      "squad-fpp": "squad-fpp",
+    };
+
+    const selectedMode = gameModeMap[gameMode] || "squad";
+    const gameStats =
+      statsData.data.attributes.rankedGameModeStats[selectedMode];
+
+    if (!gameStats) {
+      throw new Error(`해당 게임 모드(${gameMode})의 통계 정보가 없습니다`);
+    }
+
+    return gameStats;
+  } catch (error) {
+    console.error(`플레이어 통계 조회 중 에러: ${error.message}`);
+    throw error;
+  }
+}
+
+// 시간 포맷팅 함수 (초 -> MM:SS) - 이름을 다르게 변경
+function formatDuration(seconds) {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = Math.floor(seconds % 60);
+  return `${minutes.toString().padStart(2, "0")}:${remainingSeconds.toString().padStart(2, "0")}`;
+}
+
+// 배틀그라운드 명령어 핸들러 함수 - 랭크 전용으로 수정
+async function handlePubgCommand(interaction) {
+  try {
+    await interaction.deferReply();
+
+    const playerName = interaction.options.getString("닉네임");
+    const platform = interaction.options.getString("플랫폼") || "kakao";
+    const gameMode = interaction.options.getString("모드") || "squad";
+
+    console.log(
+      `배틀그라운드 랭크 전적 검색: ${playerName} (${platform}, ${gameMode})`,
+    );
+
+    // 플레이어 정보 조회
+    const playerInfo = await getPubgPlayerInfo(playerName, platform);
+    const accountId = playerInfo.id;
+
+    // 플레이어 랭크 통계 정보 조회
+    const stats = await getPubgPlayerStats(accountId, platform, gameMode);
+
+    // 통계 정보 가공
+    const kd = stats.kda ? stats.kda.toFixed(2) : "0.00";
+    const damagePerGame = stats.avgDamage ? Math.round(stats.avgDamage) : 0;
+    const winRate = stats.winRatio ? (stats.winRatio * 100).toFixed(1) : "0.0";
+    const top10Rate = stats.top10Ratio
+      ? (stats.top10Ratio * 100).toFixed(1)
+      : "0.0";
+    const avgRank = stats.avgRank ? stats.avgRank.toFixed(1) : "N/A";
+    const longestKill = stats.longestKill
+      ? `${stats.longestKill.toFixed(1)}m`
+      : "0m";
+    const headshots = stats.headshotRatio
+      ? (stats.headshotRatio * 100).toFixed(1)
+      : "0.0";
+    const totalGames = stats.roundsPlayed || 0;
+    const avgSurviveTime = stats.avgSurvivalTime
+      ? formatDuration(stats.avgSurvivalTime)
+      : "00:00";
+    const kills = stats.kills || 0;
+
+    // 임베드 생성
+    const embed = new EmbedBuilder()
+      .setColor("#0099ff")
+      .setTitle(`🎮 ${playerName}님의 배틀그라운드 랭크 전적`)
+      .setDescription(
+        `플랫폼: ${platform.toUpperCase()} | 모드: ${gameMode.toUpperCase()} | ${totalGames}게임`,
+      )
+      .addFields(
+        { name: "K/D", value: kd, inline: true },
+        {
+          name: "경기 당 데미지",
+          value: damagePerGame.toString(),
+          inline: true,
+        },
+        { name: "승 %", value: `${winRate}%`, inline: true },
+        { name: "Top 10%", value: `${top10Rate}%`, inline: true },
+        { name: "최대 거리 킬", value: longestKill, inline: true },
+        { name: "헤드샷", value: `${headshots}%`, inline: true },
+        { name: "평균등수", value: avgRank.toString(), inline: true },
+        { name: "평균 생존시간", value: avgSurviveTime, inline: true },
+        {
+          name: "최다 킬",
+          value: stats.maxKills?.toString() || "0",
+          inline: true,
+        },
+      )
+      .setFooter({ text: "데이터 제공: PUBG API" })
+      .setTimestamp();
+
+    await interaction.editReply({ embeds: [embed] });
+  } catch (error) {
+    console.error("배틀그라운드 전적 조회 중 에러:", error);
+
+    let errorMessage = "정보를 조회하는 중 오류가 발생했습니다.";
+    if (error.response) {
+      if (error.response.status === 404) {
+        errorMessage = "존재하지 않는 플레이어입니다.";
+      } else if (error.response.status === 429) {
+        errorMessage =
+          "API 요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.";
+      } else if (
+        error.response.status === 401 ||
+        error.response.status === 403
+      ) {
+        errorMessage = "API 키가 유효하지 않습니다. 관리자에게 문의하세요.";
+      } else {
+        errorMessage = `API 오류 (${error.response.status}): ${error.response.data?.message || "알 수 없는 오류"}`;
+      }
+    } else if (error.message) {
+      errorMessage = error.message;
+    }
+
+    await interaction.editReply(`⚠️ ${errorMessage}`);
+  }
+}
+
 // 준비되면 실행
 client.once("ready", async () => {
   try {
@@ -2500,6 +2737,9 @@ client.on("interactionCreate", async (interaction) => {
     if (!interaction.isCommand() && !interaction.isButton()) return;
     // 슬래시 커맨드 처리
     if (interaction.isCommand()) {
+      if (interaction.commandName === "배그") {
+        await handlePubgCommand(interaction);
+      }
       if (interaction.commandName === "발로란트") {
         await handleValorantCommand(interaction);
       }

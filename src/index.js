@@ -2189,7 +2189,7 @@ function generateFortune(userId) {
   const koreanNow = getCurrentKoreanDate();
 
   // 9시간을 밀리초로 변환하여 빼기
-  const adjustedTime = new Date(koreanNow.getTime() - 9 * 60 * 60 * 1000);
+  const adjustedTime = new Date(koreanNow.getTime() + 9 * 60 * 60 * 1000);
 
   // 조정된 시간으로 오늘 날짜 생성
   const today = adjustedTime.toISOString().slice(0, 10).replace(/-/g, "");

@@ -2187,9 +2187,16 @@ function generateFortune(userId) {
   // 기존 한국 시간 가져오기 사용
   // 매번 새롭게 날짜 계산
   const koreanNow = getCurrentKoreanDate();
-  const today = koreanNow.toISOString().slice(0, 10).replace(/-/g, "");
+
+  // 9시간을 밀리초로 변환하여 빼기
+  const adjustedTime = new Date(koreanNow.getTime() - 9 * 60 * 60 * 1000);
+
+  // 조정된 시간으로 오늘 날짜 생성
+  const today = adjustedTime.toISOString().slice(0, 10).replace(/-/g, "");
 
   console.log("오늘 날짜 (재계산됨):", today);
+  console.log("원래 시간:", koreanNow);
+  console.log("9시간 조정된 시간:", adjustedTime);
 
   // 더 복잡한 시드 생성
   let seed = 0;

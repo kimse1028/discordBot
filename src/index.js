@@ -453,10 +453,10 @@ const fortuneData = {
     { grade: "대길", probability: 7, color: "#FF0000", emoji: "🔱" },
     { grade: "중길", probability: 15, color: "#FFA500", emoji: "🌟" },
     { grade: "소길", probability: 25, color: "#FFFF00", emoji: "⭐" },
-    { grade: "평범", probability: 25, color: "#C0C0C0", emoji: "🔄" },
-    { grade: "흉", probability: 15, color: "#A9A9A9", emoji: "⚠️" },
-    { grade: "대흉", probability: 7, color: "#4A4A4A", emoji: "💀" },
-    { grade: "존망", probability: 3, color: "#000000", emoji: "☠️" },
+    { grade: "평범", probability: 40, color: "#C0C0C0", emoji: "🔄" },
+    { grade: "흉", probability: 7, color: "#A9A9A9", emoji: "⚠️" },
+    { grade: "대흉", probability: 2.7, color: "#4A4A4A", emoji: "💀" },
+    { grade: "존망", probability: 0.3, color: "#000000", emoji: "☠️" },
   ],
   advice: {
     // 피해야 할 것들
